@@ -192,7 +192,7 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                                         NewKey,
                                         MembershipVector,
                                         Level + 1,
-                                        [{SelfKey, SelfServer}]},
+                                        [{SelfServer, SelfKey}]},
                                     Next});
                         SelfKey < NewKey ->
                             ets:insert('Incomplete', {{From, Ref, smaller}, Level}),
@@ -204,7 +204,7 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                                         NewKey,
                                         MembershipVector,
                                         Level + 1,
-                                        [{SelfKey, SelfServer}]},
+                                        [{SelfServer, SelfKey}]},
                                     Next})
                     end;
 
@@ -237,6 +237,7 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                     TailN = ?LEVEL_MAX - Level - 1,
                     <<_:Level, Bit:1, _:TailN>> = MembershipVector,
                     <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
+                    io:format("    SelfBit=~p, Bit=~p, NewKey=~p, SelfKey=~p~n", [SelfBit, Bit, NewKey, SelfKey]),
 
                     if
                         NewKey < SelfKey ->
@@ -251,11 +252,13 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                                                 NewKey,
                                                 MembershipVector,
                                                 Level + 1,
-                                                [{SelfKey, SelfServer} | Neighbor]},
+                                                [{SelfServer, SelfKey} | Neighbor]},
                                             Next});
                                 _ ->
                                     {BiggerNode, BiggerKey} = lists:nth(Level, Bigger),
                                     Remnant = lists:duplicate(?LEVEL_MAX - Level, {'__none__', '__none__'}),
+                                    io:format("    BiggerNode=~p, BiggerKey=~p~n", [BiggerNode, BiggerKey]),
+
                                     case BiggerNode of
                                         '__none__' ->
                                             case Next of
@@ -299,7 +302,7 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                                                 NewKey,
                                                 MembershipVector,
                                                 Level + 1,
-                                                [{SelfKey, SelfServer} | Neighbor]},
+                                                [{SelfServer, SelfKey} | Neighbor]},
                                             Next});
                                 _ ->
                                     {SmallerNode, SmallerKey} = lists:nth(Level, Smaller),
@@ -368,7 +371,7 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                                         MembershipVector,
                                         Level + 1,
                                         AnotherNeighbor,
-                                        [{SelfKey, SelfServer}]}});
+                                        [{SelfServer, SelfKey}]}});
                         SelfKey < NewKey ->
                             ets:insert('Incomplete', {{From, Ref, smaller}, Level}),
 
@@ -380,7 +383,7 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                                         MembershipVector,
                                         Level + 1,
                                         AnotherNeighbor,
-                                        [{SelfKey, SelfServer}]}})
+                                        [{SelfServer, SelfKey}]}})
                     end;
 
                 ?LEVEL_MAX ->
@@ -410,7 +413,7 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                                                 MembershipVector,
                                                 Level + 1,
                                                 AnotherNeighbor,
-                                                [{SelfKey, SelfServer} | Neighbor]}});
+                                                [{SelfServer, SelfKey} | Neighbor]}});
                                 _ ->
                                     {BiggerNode, BiggerKey} = lists:nth(Level, Bigger),
                                     case BiggerNode of
@@ -445,7 +448,7 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                                                 MembershipVector,
                                                 Level + 1,
                                                 AnotherNeighbor, 
-                                                [{SelfKey, SelfServer} | Neighbor]}});
+                                                [{SelfServer, SelfKey} | Neighbor]}});
                                 _ ->
                                     {SmallerNode, SmallerKey} = lists:nth(Level, Smaller),
                                     case SmallerNode of
