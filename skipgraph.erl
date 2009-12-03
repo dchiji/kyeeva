@@ -1,36 +1,10 @@
 -module(skipgraph).
 -export([start/1, init/1, handle_call/3, join/1]).
--behaviour(gen_server).
+%-behaviour(gen_server).
 
 -define(LEVEL_MAX, 8).
 -define(NOW, fun(Term) -> io:format("test:now:\t=>   ~p~n", [Term]) end).
 
-select_best([], _Key) ->
-    {'__none__', '__none__'};
-select_best([Item], _Key) ->
-    Item;
-select_best([{'__none__', '__none__'} | _], _Key) ->
-    {'__none__', '__none__'};
-select_best([{Node0, Key0}, {'__none__', '__none__'} | _], _Key) ->
-    {Node0, Key0};
-select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key1 < Key0 ->    % smaller and smaller
-    if
-        Key0 < Key ->
-            {'__self__'};
-        Key1 < Key ->
-            {Node0, Key0};
-        Key < Key0 ->
-            select_best([{Node1, Key1} | Tail], Key)
-    end;
-select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key0 < Key1 ->    % bigger and bigger
-    if
-        Key < Key0 ->
-            {'__self__'};
-        Key < Key1 ->
-            {Node0, Key0};
-        Key0 < Key ->
-            select_best([{Node1, Key1} | Tail], Key)
-    end.
 
 start(InitialNode) ->
     % {Key, {Value, MembershipVector, Neighbor}}
@@ -380,13 +354,6 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
             [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
             case Level of
-                ?LEVEL_MAX ->
-                    ?NOW('join-process-2: LEVEL_MAX'),
-                    if
-                        NewKey < SelfKey -> gen_server:reply(From, {Neighbor, AnotherNeighbor});
-                        SelfKey < NewKey -> gen_server:reply(From, {AnotherNeighbor, Neighbor})
-                    end;
-
                 0 ->
                     ?NOW('join-process-2: 0'),
                     if
@@ -414,6 +381,13 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                                         Level + 1,
                                         AnotherNeighbor,
                                         [{SelfKey, SelfServer}]}})
+                    end;
+
+                ?LEVEL_MAX ->
+                    ?NOW('join-process-2: LEVEL_MAX'),
+                    if
+                        NewKey < SelfKey -> gen_server:reply(From, {Neighbor, AnotherNeighbor});
+                        SelfKey < NewKey -> gen_server:reply(From, {AnotherNeighbor, Neighbor})
                     end;
 
                 _ ->
@@ -502,11 +476,38 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
 handle_call({SelfKey, {'join-update', Ref, Server, NewKey}},
     From,
     State) ->
-    ;
+    pass;
 
-handle_call(Message, From, State) ->
+handle_call(Message, _From, State) ->
     io:format("Not support message: ~p~n", [Message]),
     {noreply, State}.
+
+select_best([], _Key) ->
+    {'__none__', '__none__'};
+select_best([Item], _Key) ->
+    Item;
+select_best([{'__none__', '__none__'} | _], _Key) ->
+    {'__none__', '__none__'};
+select_best([{Node0, Key0}, {'__none__', '__none__'} | _], _Key) ->
+    {Node0, Key0};
+select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key1 < Key0 ->    % smaller and smaller
+    if
+        Key0 < Key ->
+            {'__self__'};
+        Key1 < Key ->
+            {Node0, Key0};
+        Key < Key0 ->
+            select_best([{Node1, Key1} | Tail], Key)
+    end;
+select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key0 < Key1 ->    % bigger and bigger
+    if
+        Key < Key0 ->
+            {'__self__'};
+        Key < Key1 ->
+            {Node0, Key0};
+        Key0 < Key ->
+            select_best([{Node1, Key1} | Tail], Key)
+    end.
 
 make_membership_vector() ->
     make_membership_vector(<<>>, ?LEVEL_MAX / 8).
@@ -531,6 +532,6 @@ getv(Key) ->
     case gen_server:call(?MODULE, {get, Key}) of
         {ok, Value} ->
             Value;
-        {error, 'Not Found', {Node, Key}} ->
+        {error, 'Not Found', {_Node, Key}} ->
             'Not Found'
     end.
