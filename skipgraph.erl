@@ -12,7 +12,12 @@ start(InitialNode) ->
     %   Neighbor : [{Node, Key}, ...]
     %     Node=local : '__local__'
     ets:new('Peer', [ordered_set, public, named_table]),
+    
+    % {{{From, Ref}, Key, Level, Direction}, Snapshot}
+    %   {From, Ref} : Specific Value
+    %   Direction : bigger|smaller
     ets:new('Incomplete', [bag, public, named_table]),
+
     ets:new('Property', [set, public, named_table]),
 
     {ok, Server} = gen_server:start_link({global, manager}, ?MODULE, [InitialNode, make_membership_vector()], []),
@@ -183,7 +188,12 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                 0 ->
                     if
                         NewKey < SelfKey ->
-                            ets:insert('Incomplete', {{From, Ref, bigger}, Level}),
+                            ets:insert('Incomplete',
+                                {{{From, Ref},
+                                        SelfKey,
+                                        Level,
+                                        bigger},
+                                    lists:nth(Level, Bigger)}),
 
                             gen_server:call(SelfServer,
                                 {SelfKey,
@@ -195,7 +205,12 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                                         [{SelfServer, SelfKey}]},
                                     Next});
                         SelfKey < NewKey ->
-                            ets:insert('Incomplete', {{From, Ref, smaller}, Level}),
+                            ets:insert('Incomplete',
+                                {{{From, Ref},
+                                        SelfKey,
+                                        Level,
+                                        smaller},
+                                    lists:nth(Level, Smaller)}),
 
                             gen_server:call(SelfServer,
                                 {SelfKey,
@@ -243,7 +258,12 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                         NewKey < SelfKey ->
                             case Bit of
                                 SelfBit ->
-                                    ets:insert('Incomplete', {{From, Ref, bigger}, Level}),
+                                    ets:insert('Incomplete',
+                                        {{{From, Ref},
+                                                SelfKey,
+                                                Level,
+                                                bigger},
+                                            lists:nth(Level, Bigger)}),
 
                                     gen_server:call(SelfServer,
                                         {SelfKey, 
@@ -293,7 +313,12 @@ handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, 
                         SelfKey < NewKey ->
                             case Bit of
                                 SelfBit ->
-                                    ets:insert('Incomplete', {{From, Ref, smaller}, Level}),
+                                    ets:insert('Incomplete',
+                                        {{{From, Ref},
+                                                SelfKey,
+                                                Level,
+                                                smaller},
+                                            lists:nth(Level, Smaller)}),
 
                                     gen_server:call(SelfServer,
                                         {SelfKey,
@@ -361,7 +386,12 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                     ?NOW('join-process-2: 0'),
                     if
                         NewKey < SelfKey ->
-                            ets:insert('Incomplete', {{From, Ref, bigger}, Level}),
+                            ets:insert('Incomplete',
+                                {{{From, Ref},
+                                        SelfKey,
+                                        Level,
+                                        bigger},
+                                    lists:nth(Level, Bigger)}),
 
                             gen_server:call(SelfServer,
                                 {SelfKey,
@@ -373,7 +403,12 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                                         AnotherNeighbor,
                                         [{SelfServer, SelfKey}]}});
                         SelfKey < NewKey ->
-                            ets:insert('Incomplete', {{From, Ref, smaller}, Level}),
+                            ets:insert('Incomplete',
+                                {{{From, Ref},
+                                        SelfKey,
+                                        Level,
+                                        smaller},
+                                    lists:nth(Level, Smaller)}),
 
                             gen_server:call(SelfServer,
                                 {SelfKey,
@@ -403,7 +438,12 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                         NewKey < SelfKey ->
                             case Bit of
                                 SelfBit ->
-                                    ets:insert('Incomplete', {{From, Ref, bigger}, Level}),
+                                    ets:insert('Incomplete',
+                                        {{{From, Ref},
+                                                SelfKey,
+                                                Level,
+                                                bigger},
+                                            lists:nth(Level, Bigger)}),
 
                                     gen_server:call(SelfServer,
                                         {SelfKey,
@@ -438,7 +478,12 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
                         SelfKey < NewKey ->
                             case Bit of
                                 SelfBit ->
-                                    ets:insert('Incomplete', {{From, Ref, smaller}, Level}),
+                                    ets:insert('Incomplete',
+                                        {{{From, Ref},
+                                                SelfKey,
+                                                Level,
+                                                smaller},
+                                            lists:nth(Level, Smaller)}),
 
                                     gen_server:call(SelfServer,
                                         {SelfKey,
@@ -476,14 +521,27 @@ handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, 
     spawn(F),
     {reply, '__none__', State};
 
-handle_call({SelfKey, {'join-update', Ref, Server, NewKey}},
+handle_call({'join-update', Ref, SelfKey, Level, Snapshots, B_or_S, {Server, NewKey}},
     From,
     State) ->
-    pass;
+
+    Diff = ets:lookup('Incomplete', {From, Ref, B_or_S}),
+    
 
 handle_call(Message, _From, State) ->
     io:format("Not support message: ~p~n", [Message]),
     {noreply, State}.
+
+
+rebuild(List, Diff) ->
+    rebuild(List, Diff, 0).
+
+rebuild(List, Diff, ?LEVEL_MAX) ->
+    List;
+rebuild(Tail, [], N) ->
+    Tail;
+rebuild(List, Diff, N) ->
+    pass;
 
 select_best([], _Key) ->
     {'__none__', '__none__'};
@@ -526,7 +584,10 @@ join(Key) ->
     Ref = make_ref(),
 
     {Smaller, Bigger} = gen_server:call(Server, {join, Ref, Key, MembershipVector}, infinity),
-    ets:insert('Peer', {Key,{'value', MembershipVector, {lists:reverse(Smaller), lists:reverse(Bigger)}}}).
+    % 意図的にupdateする手前でinsertしている
+    ets:insert('Peer', {Key,{'value', MembershipVector, {lists:reverse(Smaller), lists:reverse(Bigger)}}}),
+    
+    update.
 
 putv(Key, Value) ->
     gen_server:call(?MODULE, {put, Key, Value}).
