@@ -44,10 +44,26 @@ handle_call({join, NewKey},
     spawn(F),
     {noreply, [InitialNode | Tail]};
 
-% 最もNewKeyに近いピアを(内側に向かって)探索する
-handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}, Level}},
+handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Level},
     From,
-    [InitialNode | Tail]) ->
+    State) ->
+
+    spawn(fun() ->
+                gen_server:call(whereis(?MODULE),
+                    {SelfKey,
+                        {'join-process-0',
+                            {From,
+                                Server,
+                                NewKey,
+                                MembershipVector}},
+                        Level})
+        end),
+    {noreply, State};
+
+% 最もNewKeyに近いピアを(内側に向かって)探索する
+handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector}}, Level},
+    _From,
+    State) ->
 
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -77,10 +93,11 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}, Lev
                                 gen_server:call(BestNode,
                                     {BestKey,
                                         {'join-process-0',
-                                            {Server,
+                                            {From,
+                                                Server,
                                                 NewKey,
-                                                MembershipVector},
-                                            Level}})
+                                                MembershipVector}},
+                                        Level})
                         end)
             end;
 
@@ -109,15 +126,16 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}, Lev
                                 gen_server:call(BestNode,
                                     {BestKey,
                                         {'join-process-0',
-                                            {Server,
+                                            {From,
+                                                Server,
                                                 NewKey,
-                                                MembershipVector},
-                                            Level}})
+                                                MembershipVector}},
+                                        Level})
                         end)
             end
     end,
 
-    {noreply, [InitialNode | Tail]};
+    {noreply, State};
 
 handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
@@ -126,10 +144,11 @@ handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector
     join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level),
     {reply, '__none__', State};
 
-handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}, Level}, Other},
+handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     _From,
     State) ->
 
+    io:format("join-process-2~n"),
     update(SelfKey, {Server, NewKey}, Level),
     if
         NewKey < SelfKey ->
@@ -146,9 +165,25 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}, Level}, Other},
 
     {reply, '__none__', State};
 
-% 最もNewKeyに近いピアを(内側に向かって)探索する
-handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVector}, Level}},
+handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVector}}, Level},
     From,
+    State) ->
+
+    spawn(fun() ->
+                gen_server:call(whereis(?MODULE),
+                    {SelfKey,
+                        {'join-process-oneway-0',
+                            {From,
+                                Server,
+                                NewKey,
+                                MembershipVector}},
+                        Level})
+        end),
+    {noreply, State};
+
+% 最もNewKeyに近いピアを(内側に向かって)探索する
+handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, MembershipVector}}, Level},
+    _From,
     [InitialNode | Tail]) ->
 
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
@@ -173,16 +208,17 @@ handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVecto
                             MembershipVector},
                         Level);
 
-                % 最適なピアの探索を続ける(join-process-0)
+                % 最適なピアの探索を続ける(join-process-oneway-0)
                 {BestNode, BestKey} ->
                     spawn(fun() ->
                                 gen_server:call(BestNode,
                                     {BestKey,
                                         {'join-process-oneway-0',
-                                            {Server,
+                                            {From,
+                                                Server,
                                                 NewKey,
-                                                MembershipVector},
-                                            Level}})
+                                                MembershipVector}},
+                                        Level})
                         end)
             end;
 
@@ -205,16 +241,17 @@ handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVecto
                             MembershipVector},
                         Level);
 
-                % 最適なピアの探索を続ける(join-process-0)
+                % 最適なピアの探索を続ける(join-process-oneway-0)
                 {BestNode, BestKey} ->
                     spawn(fun() ->
                                 gen_server:call(BestNode,
                                     {BestKey,
                                         {'join-process-oneway-0',
-                                            {Server,
+                                            {From,
+                                                Server,
                                                 NewKey,
-                                                MembershipVector},
-                                            Level}})
+                                                MembershipVector}},
+                                        Level})
                         end)
             end
     end,
@@ -254,43 +291,76 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
         SelfBit ->
             if
                 NewKey < SelfKey ->
-                    update(SelfKey, {Server, NewKey}, Level),
-
                     case lists:nth(Level + 1, Smaller) of
                         {'__none__', '__none__'} ->
+                            update(SelfKey, {Server, NewKey}, Level),
+
                             gen_server:reply(From,
                                 {ok,
                                     {'__none__', '__none__'},
                                     {whereis(?MODULE), SelfKey}});
+
                         {OtherNode, OtherKey} ->
-                            gen_server:call(OtherNode,
-                                {OtherKey,
-                                    {'join-process-2',
-                                        {From,
-                                            Server,
-                                            NewKey},
-                                        Level},
-                                    {whereis(?MODULE), SelfKey}})
-                    end;
+                            Self = whereis(?MODULE),
+                            case OtherNode of
+                                Self ->
+                                    spawn(fun() ->
+                                                gen_server:call(OtherNode,
+                                                    {OtherKey,
+                                                        {'join-process-2',
+                                                            {From,
+                                                                Server,
+                                                                NewKey}},
+                                                        Level,
+                                                        {whereis(?MODULE), SelfKey}})
+                                        end);
+                                _ ->
+                                    gen_server:call(OtherNode,
+                                        {OtherKey,
+                                            {'join-process-2',
+                                                {From,
+                                                    Server,
+                                                    NewKey}},
+                                            Level,
+                                            {whereis(?MODULE), SelfKey}})
+                            end,
+                            update(SelfKey, {Server, NewKey}, Level);
 
                 SelfKey < NewKey ->
-                    update(SelfKey, {Server, NewKey}, Level),
-
                     case lists:nth(Level + 1, Bigger) of
                         {'__none__', '__none__'} ->
+                            update(SelfKey, {Server, NewKey}, Level),
+
                             gen_server:reply(From,
                                 {ok,
                                     {whereis(?MODULE), SelfKey},
                                     {'__none__', '__none__'}});
+
                         {OtherNode, OtherKey} ->
-                            gen_server:call(OtherNode,
-                                {OtherKey,
-                                    {'join-process-2',
-                                        {From,
-                                            Server,
-                                            NewKey},
-                                        Level},
-                                    {whereis(?MODULE), SelfKey}})
+                            Self = whereis(?MODULE),
+                            case OtherNode of
+                                Self ->
+                                    spawn(fun() ->
+                                                gen_server:call(OtherNode,
+                                                    {OtherKey,
+                                                        {'join-process-2',
+                                                            {From,
+                                                                Server,
+                                                                NewKey}},
+                                                        Level,
+                                                        {whereis(?MODULE), SelfKey}})
+                                        end);
+                                _ ->
+                                    gen_server:call(OtherNode,
+                                        {OtherKey,
+                                            {'join-process-2',
+                                                {From,
+                                                    Server,
+                                                    NewKey}},
+                                            Level,
+                                            {whereis(?MODULE), SelfKey}})
+                            end,
+                            update(SelfKey, {Server, NewKey}, Level)
                     end
             end;
 
@@ -411,6 +481,8 @@ select_best([{'__none__', '__none__'} | _], _Key) ->
     {'__none__', '__none__'};
 select_best([{Node0, Key0}, {'__none__', '__none__'} | _], _Key) ->
     {Node0, Key0};
+select_best([{_Node0, Key0}, {Node1, Key1} | Tail], Key) when Key1 == Key0 ->    % rotate
+    select_best([{Node1, Key1} | Tail], Key);
 select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key1 < Key0 ->    % smaller and smaller
     if
         Key0 < Key ->
@@ -463,8 +535,8 @@ join({InitNode, InitKey}, NewKey, MembershipVector, N, OtherPeer) ->
             {'join-process-0',
                 {whereis(?MODULE),
                     NewKey,
-                    MembershipVector},
-                N}}),
+                    MembershipVector}},
+            N}),
 
     case Result of
         {ok, {'__none__', '__none__'}, {'__none__', '__none__'}} ->
@@ -502,8 +574,8 @@ join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
             {'join-process-oneway-0',
                 {whereis(?MODULE),
                     NewKey,
-                    MembershipVector},
-                N}}),
+                    MembershipVector}},
+            N}),
 
     case Result of
         {ok, {'__none__', '__none__'}} ->
