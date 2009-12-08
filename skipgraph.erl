@@ -1,547 +1,407 @@
 -module(skipgraph).
--export([start/1, init/1, handle_call/3, join/1]).
-%-behaviour(gen_server).
+-export([start/1, init/1, handle_call/3, terminate/2, join/1, test/0]).
+-export([make_membership_vector/0]).
+-behaviour(gen_server).
 
 -define(LEVEL_MAX, 8).
--define(NOW, fun(Term) -> io:format("test:now:\t=>   ~p~n", [Term]) end).
 
 
 start(InitialNode) ->
     % {Key, {Value, MembershipVector, Neighbor}}
     %   MembershipVector : <<1, 0, 1, 1, ...>>
     %   Neighbor : [{Node, Key}, ...]
-    %     Node=local : '__local__'
     ets:new('Peer', [ordered_set, public, named_table]),
     
-    % {{{From, Ref}, Key, Level, Direction}, Snapshot}
-    %   {From, Ref} : Specific Value
-    %   Direction : bigger|smaller
-    ets:new('Incomplete', [bag, public, named_table]),
-
-    ets:new('Property', [set, public, named_table]),
-
-    {ok, Server} = gen_server:start_link({global, manager}, ?MODULE, [InitialNode, make_membership_vector()], []),
-    ets:insert('Property', {server, Server}),
-
-    {ok, Server}.
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, make_membership_vector()], [{debug, [trace, log]}]).
 
 init(Arg) ->
     {ok, Arg}.
 
-% joinメッセージを受信し、適当なローカルピアにjoin-process-0メッセージを送信する
-handle_call({join, Ref, NewKey, MembershipVector},
+% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す
+handle_call({join, NewKey},
     From,
     [InitialNode | Tail]) ->
 
-    SelfServer = self(),
     F = fun() ->
             PeerList = ets:tab2list('Peer'),
-
             case PeerList of
                 [] ->
                     case InitialNode of
                         '__none__' ->
-                            NewSmaller = NewBigger = lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
-                            gen_server:reply(From, {NewSmaller, NewBigger});
+                            gen_server:reply(From,
+                                {ok, {'__none__', '__none__'}});
                         _ ->
                             {_, Key} = gen_server:call(InitialNode, {peer, random}),
-                            gen_server:call(InitialNode,
-                                {Key,
-                                    {'join-process-0',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector}})
+                            gen_server:reply(From, {ok, {InitialNode, Key}})
                     end;
 
                 _ ->
                     [{SelfKey, {_, _, _}} | _] = PeerList,
-                    gen_server:call(SelfServer,
-                        {SelfKey,
-                            {'join-process-0',
-                                {From, Ref},
-                                NewKey,
-                                MembershipVector}})
+                    gen_server:reply(From, {ok, {whereis(?MODULE), SelfKey}})
             end
     end,
 
     spawn(F),
     {noreply, [InitialNode | Tail]};
 
-% 最もNewKeyに近いピアを探索する
-handle_call({SelfKey, {'join-process-0', {From, Ref}, NewKey, MembershipVector}},
-    _From,
+% 最もNewKeyに近いピアを(内側に向かって)探索する
+handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}, Level}},
+    From,
     [InitialNode | Tail]) ->
 
-    ?NOW('join-process-0'),
+    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
-    SelfServer = self(),
-    F = fun() ->
-            [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+    if
+        % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
+        NewKey < SelfKey ->
+            case select_best(lists:nthtail(Level + 1, Smaller), NewKey) of
+                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
+                {'__none__', '__none__'} ->
+                    join_process_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
+                {'__self__'} ->
+                    join_process_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
 
-            if
-                % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
-                NewKey < SelfKey ->
-                    case select_best(Smaller, NewKey) of
-                        % 最適なピアが見つかったので、次のフェーズ(join-process-1)へ移行
-                        {'__none__', '__none__'} ->
-                            Next = {'__none__', '__none__'},
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-1',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        0,
-                                        []}, 
-                                    Next});
-                        {'__self__'} ->
-                            Next = lists:nth(0, Smaller),
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-1',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        0,
-                                        []}},
-                                Next);
+                % 最適なピアの探索を続ける(join-process-0)
+                {BestNode, BestKey} ->
+                    spawn(fun() ->
+                                gen_server:call(BestNode,
+                                    {BestKey,
+                                        {'join-process-0',
+                                            {Server,
+                                                NewKey,
+                                                MembershipVector},
+                                            Level}})
+                        end)
+            end;
 
-                        % 最適なピアの探索を続ける(join-process-0)
-                        {'__local__', BestKey} ->
-                            gen_server:call(SelfServer,
-                                {BestKey,
-                                    {'join-process-0',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector}});
-                        {Server, BestKey} ->
-                            gen_server:call(Server,
-                                {BestKey,
-                                    {'join-process-0',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector}})
-                    end;
+        % HEAD--A--B--SelfKey-(-C--D-)-NewKey--E--F--TAIL
+        SelfKey < NewKey ->
+            case select_best(lists:nthtail(Level, Bigger), NewKey) of
+                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
+                {'__none__', '__none__'} ->
+                    join_process_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
+                {'__self__'} ->
+                    join_process_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
 
-                % HEAD--A--B--SelfKey-(-C--D-)-NewKey--E--F--TAIL
-                SelfKey < NewKey ->
-                    case select_best(Bigger, NewKey) of
-                        % 最適なピアが見つかったので、次のフェーズ(join-process-1)へ移行
-                        {'__none__', '__none__'} ->
-                            Next = {'__none__', '__none__'},
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-1',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        0,
-                                        []},
-                                    Next});
-                        {'__self__'} ->
-                            Next = lists:nth(0, Bigger),
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-1',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        0,
-                                        []},
-                                    Next});
-
-                        % 最適なピアの探索を続ける(join-process-0)
-                        {'__local__', BestKey} ->
-                            gen_server:call(SelfServer,
-                                {BestKey,
-                                    {'join-process-0',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector}});
-                        {Server, BestKey} ->
-                            gen_server:call(Server,
-                                {BestKey,
-                                    {'join-process-0',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector}})
-                    end
+                % 最適なピアの探索を続ける(join-process-0)
+                {BestNode, BestKey} ->
+                    spawn(fun() ->
+                                gen_server:call(BestNode,
+                                    {BestKey,
+                                        {'join-process-0',
+                                            {Server,
+                                                NewKey,
+                                                MembershipVector},
+                                            Level}})
+                        end)
             end
     end,
 
-    spawn(F),
-    {reply, '__none__', [InitialNode, Tail]};
+    {noreply, [InitialNode | Tail]};
 
-% MembershipVector[Level]が一致するピアを外側に向かって探索 & LevelMaxに達したとき、join-process-1へ移行
-% {最適なlocal-key, {'join-process-1', 新しくjoinするkey, keyのMembershipVector}}
-handle_call({SelfKey, {'join-process-1', {From, Ref}, NewKey, MembershipVector, Level, Neighbor}, Next},
+handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
 
-    ?NOW('join-process-1'),
-
-    SelfServer = self(),
-    F = fun() ->
-            [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
-
-            case Level of
-                0 ->
-                    if
-                        NewKey < SelfKey ->
-                            ets:insert('Incomplete',
-                                {{{From, Ref},
-                                        SelfKey,
-                                        Level,
-                                        bigger},
-                                    lists:nth(Level, Bigger)}),
-
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-1',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        Level + 1,
-                                        [{SelfServer, SelfKey}]},
-                                    Next});
-                        SelfKey < NewKey ->
-                            ets:insert('Incomplete',
-                                {{{From, Ref},
-                                        SelfKey,
-                                        Level,
-                                        smaller},
-                                    lists:nth(Level, Smaller)}),
-
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-1',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        Level + 1,
-                                        [{SelfServer, SelfKey}]},
-                                    Next})
-                    end;
-
-                ?LEVEL_MAX ->
-                    ?NOW('join-process-1: LEVEL_MAX'),
-                    {NextNode, NextKey} = Next,
-                    case NextNode of
-                        % join-process-1の初期ノードが設定されていなければ，そのまま結果を返す
-                        '__none__' ->
-                            AnotherNeighbor = lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
-                            if
-                                NewKey < SelfKey -> gen_server:reply(From, {AnotherNeighbor, Neighbor});
-                                SelfKey < NewKey -> gen_server:reply(From, {Neighbor, AnotherNeighbor})
-                            end;
-                        % それ以外のとき，join-process-2へ移行
-                        _ ->
-                            gen_server:call(NextNode,
-                                {NextKey,
-                                    {'join-process-2',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        0,
-                                        Neighbor,
-                                        []}})
-                    end;
-
-                _ ->
-                    ?NOW('join-process-1: _'),
-                    TailN = ?LEVEL_MAX - Level - 1,
-                    <<_:Level, Bit:1, _:TailN>> = MembershipVector,
-                    <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
-                    io:format("    SelfBit=~p, Bit=~p, NewKey=~p, SelfKey=~p~n", [SelfBit, Bit, NewKey, SelfKey]),
-
-                    if
-                        NewKey < SelfKey ->
-                            case Bit of
-                                SelfBit ->
-                                    ets:insert('Incomplete',
-                                        {{{From, Ref},
-                                                SelfKey,
-                                                Level,
-                                                bigger},
-                                            lists:nth(Level, Bigger)}),
-
-                                    gen_server:call(SelfServer,
-                                        {SelfKey, 
-                                            {'join-process-1',
-                                                {From, Ref},
-                                                NewKey,
-                                                MembershipVector,
-                                                Level + 1,
-                                                [{SelfServer, SelfKey} | Neighbor]},
-                                            Next});
-                                _ ->
-                                    {BiggerNode, BiggerKey} = lists:nth(Level, Bigger),
-                                    Remnant = lists:duplicate(?LEVEL_MAX - Level, {'__none__', '__none__'}),
-                                    io:format("    BiggerNode=~p, BiggerKey=~p~n", [BiggerNode, BiggerKey]),
-
-                                    case BiggerNode of
-                                        '__none__' ->
-                                            case Next of
-                                                {'__none__', '__none__'} ->
-                                                    gen_server:reply(From,
-                                                        {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
-                                                            [Remnant | Neighbor]});
-                                                {NextNode, NextKey} ->
-                                                    gen_server:call(NextNode,
-                                                        {NextKey,
-                                                            {'join-process-2',
-                                                                {From, Ref},
-                                                                NewKey,
-                                                                MembershipVector,
-                                                                0,
-                                                                [Remnant | Neighbor],
-                                                                []}})
-                                            end;
-                                        _ ->
-                                            gen_server:call(BiggerNode,
-                                                {BiggerKey,
-                                                    {'join-process-1',
-                                                        {From, Ref},
-                                                        NewKey,
-                                                        MembershipVector,
-                                                        Level,
-                                                        Neighbor},
-                                                    Next})
-                                    end
-                            end;
-
-                        SelfKey < NewKey ->
-                            case Bit of
-                                SelfBit ->
-                                    ets:insert('Incomplete',
-                                        {{{From, Ref},
-                                                SelfKey,
-                                                Level,
-                                                smaller},
-                                            lists:nth(Level, Smaller)}),
-
-                                    gen_server:call(SelfServer,
-                                        {SelfKey,
-                                            {'join-process-1',
-                                                {From, Ref},
-                                                NewKey,
-                                                MembershipVector,
-                                                Level + 1,
-                                                [{SelfServer, SelfKey} | Neighbor]},
-                                            Next});
-                                _ ->
-                                    {SmallerNode, SmallerKey} = lists:nth(Level, Smaller),
-                                    Remnant = lists:duplicate(?LEVEL_MAX - Level, {'__none__', '__none__'}),
-                                    case SmallerNode of
-                                        '__none__' ->
-                                            case Next of
-                                                {'__none__', '__none__'} ->
-                                                    gen_server:reply(From,
-                                                        {[Remnant | Neighbor],
-                                                            lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})});
-                                                {NextNode, NextKey} ->
-                                                    gen_server:call(NextNode,
-                                                        {NextKey,
-                                                            {'join-process-2',
-                                                                {From, Ref},
-                                                                NewKey,
-                                                                MembershipVector, 
-                                                                0,
-                                                                [Remnant | Neighbor],
-                                                                []}})
-                                            end;
-                                        _ ->
-                                            gen_server:call(SmallerNode,
-                                                {SmallerKey,
-                                                    {'join-process-1',
-                                                        {From, Ref},
-                                                        NewKey,
-                                                        MembershipVector,
-                                                        Level,
-                                                        Neighbor},
-                                                    Next})
-                                    end
-                            end
-                    end
-            end
-    end,
-
-    spawn(F),
+    join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level),
     {reply, '__none__', State};
 
-% join-process-1の反対向きに処理を行う
-% {最適なlocal-key, {'join-process-2', 新しくjoinするkey, keyのMembershipVector}}
-handle_call({SelfKey, {'join-process-2', {From, Ref}, NewKey, MembershipVector, Level, AnotherNeighbor, Neighbor}},
+handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}, Level}, Other},
     _From,
     State) ->
 
-    ?NOW('join-process-2'),
-
-    SelfServer = self(),
-    F = fun() ->
-            [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
-
-            case Level of
-                0 ->
-                    ?NOW('join-process-2: 0'),
-                    if
-                        NewKey < SelfKey ->
-                            ets:insert('Incomplete',
-                                {{{From, Ref},
-                                        SelfKey,
-                                        Level,
-                                        bigger},
-                                    lists:nth(Level, Bigger)}),
-
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-2',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        Level + 1,
-                                        AnotherNeighbor,
-                                        [{SelfServer, SelfKey}]}});
-                        SelfKey < NewKey ->
-                            ets:insert('Incomplete',
-                                {{{From, Ref},
-                                        SelfKey,
-                                        Level,
-                                        smaller},
-                                    lists:nth(Level, Smaller)}),
-
-                            gen_server:call(SelfServer,
-                                {SelfKey,
-                                    {'join-process-2',
-                                        {From, Ref},
-                                        NewKey,
-                                        MembershipVector,
-                                        Level + 1,
-                                        AnotherNeighbor,
-                                        [{SelfServer, SelfKey}]}})
-                    end;
-
-                ?LEVEL_MAX ->
-                    ?NOW('join-process-2: LEVEL_MAX'),
-                    if
-                        NewKey < SelfKey -> gen_server:reply(From, {Neighbor, AnotherNeighbor});
-                        SelfKey < NewKey -> gen_server:reply(From, {AnotherNeighbor, Neighbor})
-                    end;
-
-                _ ->
-                    ?NOW('join-process-2: _'),
-                    TailN = ?LEVEL_MAX - Level - 1,
-                    <<_:Level, Bit:1, _:TailN>> = MembershipVector,
-                    <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
-
-                    if
-                        NewKey < SelfKey ->
-                            case Bit of
-                                SelfBit ->
-                                    ets:insert('Incomplete',
-                                        {{{From, Ref},
-                                                SelfKey,
-                                                Level,
-                                                bigger},
-                                            lists:nth(Level, Bigger)}),
-
-                                    gen_server:call(SelfServer,
-                                        {SelfKey,
-                                            {'join-process-2',
-                                                {From, Ref},
-                                                NewKey,
-                                                MembershipVector,
-                                                Level + 1,
-                                                AnotherNeighbor,
-                                                [{SelfServer, SelfKey} | Neighbor]}});
-                                _ ->
-                                    {BiggerNode, BiggerKey} = lists:nth(Level, Bigger),
-                                    case BiggerNode of
-                                        '__none__' ->
-                                            Remnant = lists:duplicate(?LEVEL_MAX - Level, {'__none__', '__none__'}),
-                                            gen_server:reply(From,
-                                                {[Remnant | Neighbor],
-                                                    AnotherNeighbor});
-                                        _ ->
-                                            gen_server:call(BiggerNode,
-                                                {BiggerKey,
-                                                    {'join-process-2',
-                                                        {From, Ref},
-                                                        NewKey,
-                                                        MembershipVector,
-                                                        Level,
-                                                        AnotherNeighbor,
-                                                        Neighbor}})
-                                    end
-                            end;
-
-                        SelfKey < NewKey ->
-                            case Bit of
-                                SelfBit ->
-                                    ets:insert('Incomplete',
-                                        {{{From, Ref},
-                                                SelfKey,
-                                                Level,
-                                                smaller},
-                                            lists:nth(Level, Smaller)}),
-
-                                    gen_server:call(SelfServer,
-                                        {SelfKey,
-                                            {'join-process-2',
-                                                {From, Ref},
-                                                NewKey,
-                                                MembershipVector,
-                                                Level + 1,
-                                                AnotherNeighbor, 
-                                                [{SelfServer, SelfKey} | Neighbor]}});
-                                _ ->
-                                    {SmallerNode, SmallerKey} = lists:nth(Level, Smaller),
-                                    case SmallerNode of
-                                        '__none__' ->
-                                            Remnant = lists:duplicate(?LEVEL_MAX - Level, {'__none__', '__none__'}),
-                                            gen_server:reply(From,
-                                                {AnotherNeighbor,
-                                                    [Remnant | Neighbor]});
-                                        _ ->
-                                            gen_server:call(SmallerNode,
-                                                {SmallerKey,
-                                                    {'join-process-2',
-                                                        {From, Ref},
-                                                        NewKey,
-                                                        MembershipVector,
-                                                        Level,
-                                                        AnotherNeighbor,
-                                                        Neighbor}})
-                                    end
-                            end
-                    end
-            end
+    update(SelfKey, {Server, NewKey}, Level),
+    if
+        NewKey < SelfKey ->
+            gen_server:reply(From,
+                {ok,
+                    Other,
+                    {whereis(?MODULE), SelfKey}});
+        SelfKey < NewKey ->
+            gen_server:reply(From,
+                {ok,
+                    {whereis(?MODULE), SelfKey},
+                    Other})
     end,
 
-    spawn(F),
     {reply, '__none__', State};
 
-handle_call({'join-update', Ref, SelfKey, Level, Snapshots, B_or_S, {Server, NewKey}},
+% 最もNewKeyに近いピアを(内側に向かって)探索する
+handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVector}, Level}},
     From,
+    [InitialNode | Tail]) ->
+
+    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
+    if
+        % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
+        NewKey < SelfKey ->
+            case select_best(lists:nthtail(Level + 1, Smaller), NewKey) of
+                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
+                {'__none__', '__none__'} ->
+                    join_process_oneway_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
+                {'__self__'} ->
+                    join_process_oneway_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
+
+                % 最適なピアの探索を続ける(join-process-0)
+                {BestNode, BestKey} ->
+                    spawn(fun() ->
+                                gen_server:call(BestNode,
+                                    {BestKey,
+                                        {'join-process-oneway-0',
+                                            {Server,
+                                                NewKey,
+                                                MembershipVector},
+                                            Level}})
+                        end)
+            end;
+
+        % HEAD--A--B--SelfKey-(-C--D-)-NewKey--E--F--TAIL
+        SelfKey < NewKey ->
+            case select_best(lists:nthtail(Level, Bigger), NewKey) of
+                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
+                {'__none__', '__none__'} ->
+                    join_process_oneway_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
+                {'__self__'} ->
+                    join_process_oneway_1(SelfKey,
+                        {From,
+                            Server,
+                            NewKey,
+                            MembershipVector},
+                        Level);
+
+                % 最適なピアの探索を続ける(join-process-0)
+                {BestNode, BestKey} ->
+                    spawn(fun() ->
+                                gen_server:call(BestNode,
+                                    {BestKey,
+                                        {'join-process-oneway-0',
+                                            {Server,
+                                                NewKey,
+                                                MembershipVector},
+                                            Level}})
+                        end)
+            end
+    end,
+
+    {noreply, [InitialNode | Tail]};
+
+handle_call({SelfKey, {'join-process-oneway-1', {From, Server, NewKey, MembershipVector}}, Level},
+    _From,
     State) ->
 
-    Diff = ets:lookup('Incomplete', {From, Ref, B_or_S}),
-    
+    join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level),
+    {reply, '__none__', State};
 
 handle_call(Message, _From, State) ->
-    io:format("Not support message: ~p~n", [Message]),
+    io:format("*ERR* Not support message: ~p~n", [Message]),
     {noreply, State}.
 
+terminate(_Reason, State) ->
+    spawn(fun() ->
+                unregister(?MODULE),
+                gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
+        end),
+    ok.
 
-rebuild(List, Diff) ->
-    rebuild(List, Diff, 0).
+% MembershipVector[Level]が一致するピアを外側に向かって探索．
+% 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
+join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
-rebuild(List, Diff, ?LEVEL_MAX) ->
-    List;
-rebuild(Tail, [], N) ->
-    Tail;
-rebuild(List, Diff, N) ->
-    pass;
+    [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
+    TailN = ?LEVEL_MAX - Level - 1,
+    <<_:Level, Bit:1, _:TailN>> = MembershipVector,
+    <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
+    io:format("** SelfBit=~p~n** Bit=~p~n", [SelfBit, Bit]),
+
+    case Bit of
+        SelfBit ->
+            if
+                NewKey < SelfKey ->
+                    update(SelfKey, {Server, NewKey}, Level),
+
+                    case lists:nth(Level + 1, Smaller) of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From,
+                                {ok,
+                                    {'__none__', '__none__'},
+                                    {whereis(?MODULE), SelfKey}});
+                        {OtherNode, OtherKey} ->
+                            gen_server:call(OtherNode,
+                                {OtherKey,
+                                    {'join-process-2',
+                                        {From,
+                                            Server,
+                                            NewKey},
+                                        Level},
+                                    {whereis(?MODULE), SelfKey}})
+                    end;
+
+                SelfKey < NewKey ->
+                    update(SelfKey, {Server, NewKey}, Level),
+
+                    case lists:nth(Level + 1, Bigger) of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From,
+                                {ok,
+                                    {whereis(?MODULE), SelfKey},
+                                    {'__none__', '__none__'}});
+                        {OtherNode, OtherKey} ->
+                            gen_server:call(OtherNode,
+                                {OtherKey,
+                                    {'join-process-2',
+                                        {From,
+                                            Server,
+                                            NewKey},
+                                        Level},
+                                    {whereis(?MODULE), SelfKey}})
+                    end
+            end;
+
+        _ ->
+            if
+                NewKey < SelfKey ->
+                    case lists:nth(Level + 1, Bigger) of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From, {error, mismatch});
+                        {NextNode, NextKey} ->
+                            spawn(fun() ->
+                                        gen_server:call(NextNode,
+                                            {NextKey,
+                                                {'join-process-1',
+                                                    {From,
+                                                        Server,
+                                                        NewKey,
+                                                        MembershipVector}},
+                                                Level})
+                                end)
+                    end;
+
+                SelfKey < NewKey ->
+                    case lists:nth(Level + 1, Smaller) of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From, {error, mismatch});
+                        {NextNode, NextKey} ->
+                            spawn(fun() ->
+                                        gen_server:call(NextNode,
+                                            {NextKey,
+                                                {'join-process-1',
+                                                    {From,
+                                                        Server,
+                                                        NewKey,
+                                                        MembershipVector}},
+                                                Level})
+                                end)
+                    end
+            end
+    end.
+
+% MembershipVector[Level]が一致するピアを外側に向かって探索．
+% 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
+join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
+
+    [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
+    TailN = ?LEVEL_MAX - Level - 1,
+    <<_:Level, Bit:1, _:TailN>> = MembershipVector,
+    <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
+    io:format("** SelfBit=~p~n** Bit=~p~n", [SelfBit, Bit]),
+
+    case Bit of
+        SelfBit ->
+            update(SelfKey, {Server, NewKey}, Level),
+            gen_server:reply(From,
+                {ok, {whereis(?MODULE), SelfKey}});
+
+        _ ->
+            if
+                NewKey < SelfKey ->
+                    case lists:nth(Level + 1, Bigger) of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From, {error, mismatch});
+                        {NextNode, NextKey} ->
+                            spawn(fun() ->
+                                        gen_server:call(NextNode,
+                                            {NextKey,
+                                                {'join-process-oneway-1',
+                                                    {From,
+                                                        Server,
+                                                        NewKey,
+                                                        MembershipVector}},
+                                                Level})
+                                end)
+                    end;
+
+                SelfKey < NewKey ->
+                    case lists:nth(Level + 1, Smaller) of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From, {error, mismatch});
+                        {NextNode, NextKey} ->
+                            spawn(fun() ->
+                                        gen_server:call(NextNode,
+                                            {NextKey,
+                                                {'join-process-oneway-1',
+                                                    {From,
+                                                        Server,
+                                                        NewKey,
+                                                        MembershipVector}},
+                                                Level})
+                                end)
+                    end
+            end
+    end.
+
+update(SelfKey, {Server, NewKey}, Level) ->
+    [{SelfKey, {Value, MembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+    if
+        NewKey < SelfKey ->
+            {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
+
+            NewSmaller = Front ++ [{Server, NewKey} | Tail],
+            ets:insert('Peer', {SelfKey, {Value, MembershipVector, {NewSmaller, Bigger}}});
+
+        SelfKey < NewKey ->
+            {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
+
+            NewBigger = Front ++ [{Server, NewKey} | Tail],
+            ets:insert('Peer', {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}})
+    end.
 
 select_best([], _Key) ->
     {'__none__', '__none__'};
@@ -571,7 +431,7 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key0 < Key1 ->    %
     end.
 
 make_membership_vector() ->
-    make_membership_vector(<<>>, ?LEVEL_MAX / 8).
+    make_membership_vector(<<1:1, (random:uniform(256) - 1):7>>, ?LEVEL_MAX / 8 - 1).
 
 make_membership_vector(Bin, 0.0) ->
     Bin;
@@ -579,15 +439,87 @@ make_membership_vector(Bin, N) ->
     make_membership_vector(<<Bin/binary, (random:uniform(256) - 1):8>>, N - 1).
 
 join(Key) ->
-    [{server, Server}] = ets:lookup('Property', server),
     MembershipVector = make_membership_vector(),
-    Ref = make_ref(),
+    Neighbor = {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
+                lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
 
-    {Smaller, Bigger} = gen_server:call(Server, {join, Ref, Key, MembershipVector}, infinity),
-    % 意図的にupdateする手前でinsertしている
-    ets:insert('Peer', {Key,{'value', MembershipVector, {lists:reverse(Smaller), lists:reverse(Bigger)}}}),
-    
-    update.
+    case gen_server:call(whereis(?MODULE), {join, Key}, infinity) of
+        {ok, {'__none__', '__none__'}} ->
+            ets:insert('Peer', {Key, {'value', MembershipVector, Neighbor}}),
+            ok;
+        {ok, InitPeer} ->
+            ets:insert('Peer', {Key, {'value', MembershipVector, Neighbor}}),
+            join(InitPeer, Key, MembershipVector)
+    end.
+
+join(InitPeer, Key, MembershipVector) ->
+    join(InitPeer, Key, MembershipVector, 0, {'__none__', '__none__'}).
+
+join(_, _, _, ?LEVEL_MAX, _) ->
+    ok;
+join({InitNode, InitKey}, NewKey, MembershipVector, N, OtherPeer) ->
+    Result = gen_server:call(InitNode,
+        {InitKey,
+            {'join-process-0',
+                {whereis(?MODULE),
+                    NewKey,
+                    MembershipVector},
+                N}}),
+
+    case Result of
+        {ok, {'__none__', '__none__'}, {'__none__', '__none__'}} ->
+            ok;
+
+        {ok, {'__none__', '__none__'}, BiggerPeer} ->
+            update(NewKey, BiggerPeer, N),
+            join_oneway(BiggerPeer, NewKey, MembershipVector, N + 1);
+
+        {ok, SmallerPeer, {'__none__', '__none__'}} ->
+            update(NewKey, SmallerPeer, N),
+            join_oneway(SmallerPeer, NewKey, MembershipVector, N + 1);
+
+        {ok, SmallerPeer, BiggerPeer} ->
+            update(NewKey, SmallerPeer, N),
+            update(NewKey, BiggerPeer, N),
+            join(SmallerPeer, NewKey, MembershipVector, N + 1, BiggerPeer);
+
+        {error, mismatch} ->
+            case OtherPeer of
+                {'__none__', '__none__'} ->
+                    ok;
+                _ ->
+                    join_oneway(OtherPeer, NewKey, MembershipVector, N)
+            end;
+
+        Message ->
+            io:format("*ERR* join/5:unknown message: ~p~n", [Message]),
+            error
+    end.
+
+join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
+    Result = gen_server:call(InitNode,
+        {InitKey,
+            {'join-process-oneway-0',
+                {whereis(?MODULE),
+                    NewKey,
+                    MembershipVector},
+                N}}),
+
+    case Result of
+        {ok, {'__none__', '__none__'}} ->
+            ok;
+
+        {ok, Peer} ->
+            update(NewKey, Peer, N),
+            join_oneway(Peer, NewKey, MembershipVector, N + 1);
+
+        {error, mismatch} ->
+            ok;
+
+        Message ->
+            io:format("*ERR* join/4:unknown message: ~p~n", [Message]),
+            error
+    end.
 
 putv(Key, Value) ->
     gen_server:call(?MODULE, {put, Key, Value}).
@@ -599,3 +531,6 @@ getv(Key) ->
         {error, 'Not Found', {_Node, Key}} ->
             'Not Found'
     end.
+
+test() ->
+    io:format("~nPeers = ~p~n", [ets:tab2list('Peer')]).
