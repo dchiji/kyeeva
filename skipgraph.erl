@@ -70,7 +70,7 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
     if
         % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
         NewKey < SelfKey ->
-            case select_best(lists:nthtail(Level + 1, Smaller), NewKey) of
+            case select_best(lists:nthtail(Level + 1, Smaller), NewKey, smaller) of
                 % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
                 {'__none__', '__none__'} ->
                     join_process_1(SelfKey,
@@ -103,7 +103,7 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
 
         % HEAD--A--B--SelfKey-(-C--D-)-NewKey--E--F--TAIL
         SelfKey < NewKey ->
-            case select_best(lists:nthtail(Level, Bigger), NewKey) of
+            case select_best(lists:nthtail(Level, Bigger), NewKey, bigger) of
                 % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
                 {'__none__', '__none__'} ->
                     join_process_1(SelfKey,
@@ -148,7 +148,6 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     _From,
     State) ->
 
-    io:format("join-process-2~n"),
     update(SelfKey, {Server, NewKey}, Level),
     if
         NewKey < SelfKey ->
@@ -191,7 +190,7 @@ handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, Membershi
     if
         % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
         NewKey < SelfKey ->
-            case select_best(lists:nthtail(Level + 1, Smaller), NewKey) of
+            case select_best(lists:nthtail(Level + 1, Smaller), NewKey, smaller) of
                 % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
                 {'__none__', '__none__'} ->
                     join_process_oneway_1(SelfKey,
@@ -224,7 +223,7 @@ handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, Membershi
 
         % HEAD--A--B--SelfKey-(-C--D-)-NewKey--E--F--TAIL
         SelfKey < NewKey ->
-            case select_best(lists:nthtail(Level, Bigger), NewKey) of
+            case select_best(lists:nthtail(Level, Bigger), NewKey, bigger) of
                 % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
                 {'__none__', '__none__'} ->
                     join_process_oneway_1(SelfKey,
@@ -285,7 +284,6 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     TailN = ?LEVEL_MAX - Level - 1,
     <<_:Level, Bit:1, _:TailN>> = MembershipVector,
     <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
-    io:format("** SelfBit=~p~n** Bit=~p~n", [SelfBit, Bit]),
 
     case Bit of
         SelfBit ->
@@ -324,7 +322,8 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                             Level,
                                             {whereis(?MODULE), SelfKey}})
                             end,
-                            update(SelfKey, {Server, NewKey}, Level);
+                            update(SelfKey, {Server, NewKey}, Level)
+                    end;
 
                 SelfKey < NewKey ->
                     case lists:nth(Level + 1, Bigger) of
@@ -411,7 +410,6 @@ join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
     TailN = ?LEVEL_MAX - Level - 1,
     <<_:Level, Bit:1, _:TailN>> = MembershipVector,
     <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
-    io:format("** SelfBit=~p~n** Bit=~p~n", [SelfBit, Bit]),
 
     case Bit of
         SelfBit ->
@@ -473,34 +471,65 @@ update(SelfKey, {Server, NewKey}, Level) ->
             ets:insert('Peer', {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}})
     end.
 
-select_best([], _Key) ->
+select_best([], _, _) ->
     {'__none__', '__none__'};
-select_best([Item], _Key) ->
-    Item;
-select_best([{'__none__', '__none__'} | _], _Key) ->
+select_best([{'__none__', '__none__'} | _], _, _) ->
     {'__none__', '__none__'};
-select_best([{Node0, Key0}, {'__none__', '__none__'} | _], _Key) ->
-    {Node0, Key0};
-select_best([{_Node0, Key0}, {Node1, Key1} | Tail], Key) when Key1 == Key0 ->    % rotate
-    select_best([{Node1, Key1} | Tail], Key);
-select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key1 < Key0 ->    % smaller and smaller
-    if
-        Key0 < Key ->
-            {'__self__'};
-        Key1 < Key ->
-            {Node0, Key0};
-        Key < Key0 ->
-            select_best([{Node1, Key1} | Tail], Key)
-    end;
-select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key) when Key0 < Key1 ->    % bigger and bigger
-    if
-        Key < Key0 ->
-            {'__self__'};
-        Key < Key1 ->
-            {Node0, Key0};
-        Key0 < Key ->
-            select_best([{Node1, Key1} | Tail], Key)
-    end.
+select_best([{Node0, Key0}], Key, S_or_B)
+    when S_or_B == smaller ->
+        if
+            Key0 < Key ->
+                {'__self__'};
+            true ->
+                {Node0, Key0}
+        end;
+select_best([{Node0, Key0}], Key, S_or_B)
+    when S_or_B == bigger ->
+        if
+            Key < Key0 ->
+                {'__self__'};
+            true ->
+                {Node0, Key0}
+        end;
+select_best([{Node0, Key0}, {'__none__', '__none__'} | _], Key, S_or_B)
+    when S_or_B == smaller ->
+        if
+            Key0 < Key ->
+                {'__self__'};
+            true ->
+                {Node0, Key0}
+        end;
+select_best([{Node0, Key0}, {'__none__', '__none__'} | _], Key, S_or_B)
+    when S_or_B == bigger ->
+        if
+            Key < Key0 ->
+                {'__self__'};
+            true ->
+                {Node0, Key0}
+        end;
+select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
+    when {Node0, Key0} == {Node1, Key1} ->    % rotate
+        select_best([{Node1, Key1} | Tail], Key, S_or_B);
+select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
+    when S_or_B == smaller ->
+        if
+            Key0 < Key ->
+                {'__self__'};
+            Key1 < Key ->
+                {Node0, Key0};
+            Key < Key0 ->
+                select_best([{Node1, Key1} | Tail], Key, S_or_B)
+        end;
+select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
+    when S_or_B == bigger ->
+        if
+            Key < Key0 ->
+                {'__self__'};
+            Key < Key1 ->
+                {Node0, Key0};
+            true ->
+                select_best([{Node1, Key1} | Tail], Key, S_or_B)
+        end.
 
 make_membership_vector() ->
     make_membership_vector(<<1:1, (random:uniform(256) - 1):7>>, ?LEVEL_MAX / 8 - 1).
@@ -515,7 +544,7 @@ join(Key) ->
     Neighbor = {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
                 lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
 
-    case gen_server:call(whereis(?MODULE), {join, Key}, infinity) of
+    case gen_server:call(whereis(?MODULE), {join, Key}) of
         {ok, {'__none__', '__none__'}} ->
             ets:insert('Peer', {Key, {'value', MembershipVector, Neighbor}}),
             ok;
