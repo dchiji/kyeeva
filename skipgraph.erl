@@ -14,8 +14,10 @@ start(InitialNode) ->
     
     gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, make_membership_vector()], [{debug, [trace, log]}]).
 
+
 init(Arg) ->
     {ok, Arg}.
+
 
 % joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す
 handle_call({join, NewKey},
@@ -44,6 +46,7 @@ handle_call({join, NewKey},
     spawn(F),
     {noreply, [InitialNode | Tail]};
 
+
 handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Level},
     From,
     State) ->
@@ -60,6 +63,7 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Le
         end),
     {noreply, State};
 
+
 % 最もNewKeyに近いピアを(内側に向かって)探索する
 handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
@@ -70,7 +74,7 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
     if
         % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
         NewKey < SelfKey ->
-            case select_best(lists:nthtail(Level + 1, Smaller), NewKey, smaller) of
+            case select_best(lists:nthtail(Level, Smaller), NewKey, smaller) of
                 % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
                 {'__none__', '__none__'} ->
                     join_process_1(SelfKey,
@@ -137,12 +141,14 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
 
     {noreply, State};
 
+
 handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
 
     join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level),
     {reply, '__none__', State};
+
 
 handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     _From,
@@ -164,6 +170,7 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
 
     {reply, '__none__', State};
 
+
 handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVector}}, Level},
     From,
     State) ->
@@ -180,6 +187,7 @@ handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVecto
         end),
     {noreply, State};
 
+
 % 最もNewKeyに近いピアを(内側に向かって)探索する
 handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
@@ -190,7 +198,7 @@ handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, Membershi
     if
         % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
         NewKey < SelfKey ->
-            case select_best(lists:nthtail(Level + 1, Smaller), NewKey, smaller) of
+            case select_best(lists:nthtail(Level, Smaller), NewKey, smaller) of
                 % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
                 {'__none__', '__none__'} ->
                     join_process_oneway_1(SelfKey,
@@ -257,6 +265,7 @@ handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, Membershi
 
     {noreply, [InitialNode | Tail]};
 
+
 handle_call({SelfKey, {'join-process-oneway-1', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
@@ -264,9 +273,11 @@ handle_call({SelfKey, {'join-process-oneway-1', {From, Server, NewKey, Membershi
     join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level),
     {reply, '__none__', State};
 
+
 handle_call(Message, _From, State) ->
     io:format("*ERR* Not support message: ~p~n", [Message]),
     {noreply, State}.
+
 
 terminate(_Reason, State) ->
     spawn(fun() ->
@@ -274,6 +285,7 @@ terminate(_Reason, State) ->
                 gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
         end),
     ok.
+
 
 % MembershipVector[Level]が一致するピアを外側に向かって探索．
 % 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
@@ -401,6 +413,7 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
             end
     end.
 
+
 % MembershipVector[Level]が一致するピアを外側に向かって探索．
 % 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
 join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
@@ -455,6 +468,7 @@ join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
             end
     end.
 
+
 update(SelfKey, {Server, NewKey}, Level) ->
     [{SelfKey, {Value, MembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
     if
@@ -470,6 +484,7 @@ update(SelfKey, {Server, NewKey}, Level) ->
             NewBigger = Front ++ [{Server, NewKey} | Tail],
             ets:insert('Peer', {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}})
     end.
+
 
 select_best([], _, _) ->
     {'__none__', '__none__'};
@@ -531,6 +546,7 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
                 select_best([{Node1, Key1} | Tail], Key, S_or_B)
         end.
 
+
 make_membership_vector() ->
     make_membership_vector(<<1:1, (random:uniform(256) - 1):7>>, ?LEVEL_MAX / 8 - 1).
 
@@ -538,6 +554,7 @@ make_membership_vector(Bin, 0.0) ->
     Bin;
 make_membership_vector(Bin, N) ->
     make_membership_vector(<<Bin/binary, (random:uniform(256) - 1):8>>, N - 1).
+
 
 join(Key) ->
     MembershipVector = make_membership_vector(),
@@ -597,6 +614,7 @@ join({InitNode, InitKey}, NewKey, MembershipVector, N, OtherPeer) ->
             error
     end.
 
+
 join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
     Result = gen_server:call(InitNode,
         {InitKey,
@@ -622,8 +640,10 @@ join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
             error
     end.
 
+
 putv(Key, Value) ->
     gen_server:call(?MODULE, {put, Key, Value}).
+
 
 getv(Key) ->
     case gen_server:call(?MODULE, {get, Key}) of
@@ -632,6 +652,7 @@ getv(Key) ->
         {error, 'Not Found', {_Node, Key}} ->
             'Not Found'
     end.
+
 
 test() ->
     io:format("~nPeers = ~p~n", [ets:tab2list('Peer')]).
