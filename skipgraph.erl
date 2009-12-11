@@ -1,35 +1,137 @@
 -module(skipgraph).
--export([start/1, init/1, handle_call/3, terminate/2, join/1, test/0]).
+-export([start/1, init/1, handle_call/3, terminate/2, join/1, test/0, get/1, get/2, put/2, get_server/0]).
 -export([make_membership_vector/0]).
 -behaviour(gen_server).
 
 -define(LEVEL_MAX, 8).
 
 
-start(InitialNode) ->
+start(Initial) ->
     % {Key, {Value, MembershipVector, Neighbor}}
     %   MembershipVector : <<1, 0, 1, 1, ...>>
-    %   Neighbor : [{Node, Key}, ...]
+    %   Neighbor : {Smaller, Bigger}
+    %     Smaller : [{Node, Key}, ...]
+    %     Smaller : [{Node, Key}, ...]
     ets:new('Peer', [ordered_set, public, named_table]),
-    
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, make_membership_vector()], [{debug, [trace, log]}]).
+
+    case Initial of
+        '__none__' ->
+            gen_server:start_link({local, ?MODULE}, ?MODULE, ['__none__', make_membership_vector()], [{debug, [trace, log]}]);
+        _ ->
+            InitialNode = rpc:call(Initial, skipgraph, get_server, []),
+            gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, make_membership_vector()], [{debug, [trace, log]}])
+    end.
 
 
 init(Arg) ->
     {ok, Arg}.
 
 
-% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す
-handle_call({join, NewKey},
-    From,
-    [InitialNode | Tail]) ->
+handle_call({peer, random}, From, State) ->
+    [{SelfKey, {_, _, _}} | _] = ets:tab2list('Peer'),
+    {reply, {whereis(?MODULE), SelfKey}, State};
 
+
+handle_call({get, Key0, Key1}, From, [InitialNode | Tail]) ->
     F = fun() ->
             PeerList = ets:tab2list('Peer'),
             case PeerList of
                 [] ->
                     case InitialNode of
                         '__none__' ->
+                            gen_server:reply(From,
+                                {ok, {'__none__', '__none__'}});
+                        _ ->
+                            {_, InitKey} = gen_server:call(InitialNode, {peer, random}),
+                            gen_server:call({InitKey, {'get-process-0', {Key0, Key1, From}}})
+                    end;
+                _ ->
+                    [{SelfKey, {_, _, _}} | _] = PeerList,
+                    gen_server:call(?MODULE, {SelfKey, {'get-process-0', {Key0, Key1, From}}})
+            end
+    end,
+
+    spawn(F),
+    {noreply, [InitialNode | Tail]};
+
+
+handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}}, _From, State) ->
+    F = fun() ->
+            [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+            {Neighbor, S_or_B} = if
+                Key0 =< SelfKey -> {Smaller, smaller};
+                SelfKey < Key0 -> {Bigger, bigger}
+            end,
+
+            io:format("select_best(~p, ~p, ~p)=~p~n", [Neighbor, Key0, S_or_B, select_best(Neighbor, Key0, S_or_B)]),
+
+            case select_best(Neighbor, Key0, S_or_B) of
+                % 最適なピアが見つかったので、次のフェーズ(get-process-1)へ移行
+                {'__none__', '__none__'} ->
+                    gen_server:call(?MODULE,
+                        {SelfKey,
+                            {'get-process-1',
+                                {Key0, Key1, From},
+                                []}});
+                {'__self__'} ->
+                    gen_server:call(?MODULE,
+                        {SelfKey,
+                            {'get-process-1',
+                                {Key0, Key1, From},
+                                []}});
+
+                % 最適なピアの探索を続ける(get-process-0)
+                {BestNode, BestKey} ->
+                    gen_server:call(BestNode,
+                        {BestKey,
+                            {'get-process-0',
+                                {Key0, Key1, From}}})
+            end
+    end,
+
+    spawn(F),
+    {noreply, State};
+
+
+handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}}, _From, State) ->
+    F = fun() ->
+            if
+                SelfKey < Key0 ->
+                    [{SelfKey, {_, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+                    case {NextNode, NextKey} of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From, {ok, ItemList});
+                        _ ->
+                            gen_server:call(NextNode, {NextKey, {'get-process-1', {Key0, Key1, From}, ItemList}})
+                    end;
+                
+                Key1 < SelfKey ->
+                    gen_server:reply(From, {ok, ItemList});
+
+                true ->
+                    [{SelfKey, {Value, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+                    case {NextNode, NextKey} of
+                        {'__none__', '__none__'} ->
+                            gen_server:reply(From, {ok, [{SelfKey, Value} | ItemList]});
+                        _ ->
+                            gen_server:call(NextNode, {NextKey, {'get-process-1', {Key0, Key1, From}, [{SelfKey, Value} | ItemList]}})
+                    end
+            end
+    end,
+    
+    spawn(F),
+    {noreply, State};
+
+
+% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す
+handle_call({join, NewKey}, From, [InitialNode | Tail]) ->
+    F = fun() ->
+            PeerList = ets:tab2list('Peer'),
+            case PeerList of
+                [] ->
+                    case InitialNode of
+                        '__none__' ->
+                            io:format("PeerList=~p~n", [PeerList]),
                             gen_server:reply(From,
                                 {ok, {'__none__', '__none__'}});
                         _ ->
@@ -490,6 +592,9 @@ select_best([], _, _) ->
     {'__none__', '__none__'};
 select_best([{'__none__', '__none__'} | _], _, _) ->
     {'__none__', '__none__'};
+select_best([{Node0, Key0} | _], Key, _)
+    when Key0 == Key ->
+        {Node0, Key0};
 select_best([{Node0, Key0}], Key, S_or_B)
     when S_or_B == smaller ->
         if
@@ -615,6 +720,8 @@ join({InitNode, InitKey}, NewKey, MembershipVector, N, OtherPeer) ->
     end.
 
 
+join_oneway(_, _, _, ?LEVEL_MAX) ->
+    ok;
 join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
     Result = gen_server:call(InitNode,
         {InitKey,
@@ -641,17 +748,19 @@ join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
     end.
 
 
-putv(Key, Value) ->
+put(Key, Value) ->
     gen_server:call(?MODULE, {put, Key, Value}).
 
 
-getv(Key) ->
-    case gen_server:call(?MODULE, {get, Key}) of
-        {ok, Value} ->
-            Value;
-        {error, 'Not Found', {_Node, Key}} ->
-            'Not Found'
-    end.
+get(Key0, Key1) ->
+    gen_server:call(?MODULE, {get, Key0, Key1}).
+
+get(Key) ->
+    gen_server:call(?MODULE, {get, Key, Key}).
+
+
+get_server() ->
+    whereis(?MODULE).
 
 
 test() ->
