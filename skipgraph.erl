@@ -17,6 +17,7 @@ start(Initial) ->
     case Initial of
         '__none__' ->
             gen_server:start_link({local, ?MODULE}, ?MODULE, ['__none__', make_membership_vector()], [{debug, [trace, log]}]);
+
         _ ->
             InitialNode = rpc:call(Initial, skipgraph, get_server, []),
             gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, make_membership_vector()], [{debug, [trace, log]}])
@@ -58,12 +59,11 @@ handle_call({get, Key0, Key1}, From, [InitialNode | Tail]) ->
 handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}}, _From, State) ->
     F = fun() ->
             [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
             {Neighbor, S_or_B} = if
                 Key0 =< SelfKey -> {Smaller, smaller};
                 SelfKey < Key0 -> {Bigger, bigger}
             end,
-
-            io:format("select_best(~p, ~p, ~p)=~p~n", [Neighbor, Key0, S_or_B, select_best(Neighbor, Key0, S_or_B)]),
 
             case select_best(Neighbor, Key0, S_or_B) of
                 % 最適なピアが見つかったので、次のフェーズ(get-process-1)へ移行
@@ -173,72 +173,42 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
 
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
-    if
-        % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
+    {Neighbor, S_or_B} = if
         NewKey < SelfKey ->
-            case select_best(lists:nthtail(Level, Smaller), NewKey, smaller) of
-                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
-                {'__none__', '__none__'} ->
-                    join_process_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
-                {'__self__'} ->
-                    join_process_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
-
-                % 最適なピアの探索を続ける(join-process-0)
-                {BestNode, BestKey} ->
-                    spawn(fun() ->
-                                gen_server:call(BestNode,
-                                    {BestKey,
-                                        {'join-process-0',
-                                            {From,
-                                                Server,
-                                                NewKey,
-                                                MembershipVector}},
-                                        Level})
-                        end)
-            end;
-
-        % HEAD--A--B--SelfKey-(-C--D-)-NewKey--E--F--TAIL
+            {Smaller, smaller};
         SelfKey < NewKey ->
-            case select_best(lists:nthtail(Level, Bigger), NewKey, bigger) of
-                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
-                {'__none__', '__none__'} ->
-                    join_process_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
-                {'__self__'} ->
-                    join_process_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
+            {Bigger, bigger}
+    end,
 
-                % 最適なピアの探索を続ける(join-process-0)
-                {BestNode, BestKey} ->
-                    spawn(fun() ->
-                                gen_server:call(BestNode,
-                                    {BestKey,
-                                        {'join-process-0',
-                                            {From,
-                                                Server,
-                                                NewKey,
-                                                MembershipVector}},
-                                        Level})
-                        end)
-            end
+    case select_best(lists:nthtail(Level, Neighbor), NewKey, S_or_B) of
+        % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
+        {'__none__', '__none__'} ->
+            join_process_1(SelfKey,
+                {From,
+                    Server,
+                    NewKey,
+                    MembershipVector},
+                Level);
+        {'__self__'} ->
+            join_process_1(SelfKey,
+                {From,
+                    Server,
+                    NewKey,
+                    MembershipVector},
+                Level);
+
+        % 最適なピアの探索を続ける(join-process-0)
+        {BestNode, BestKey} ->
+            spawn(fun() ->
+                        gen_server:call(BestNode,
+                            {BestKey,
+                                {'join-process-0',
+                                    {From,
+                                        Server,
+                                        NewKey,
+                                        MembershipVector}},
+                                Level})
+                end)
     end,
 
     {noreply, State};
@@ -297,72 +267,42 @@ handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, Membershi
 
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
-    if
-        % HEAD--A--B--NewKey-(-C--D-)-SelfKey--E--F--TAIL
+    {Neighbor, S_or_B} = if
         NewKey < SelfKey ->
-            case select_best(lists:nthtail(Level, Smaller), NewKey, smaller) of
-                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
-                {'__none__', '__none__'} ->
-                    join_process_oneway_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
-                {'__self__'} ->
-                    join_process_oneway_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
-
-                % 最適なピアの探索を続ける(join-process-oneway-0)
-                {BestNode, BestKey} ->
-                    spawn(fun() ->
-                                gen_server:call(BestNode,
-                                    {BestKey,
-                                        {'join-process-oneway-0',
-                                            {From,
-                                                Server,
-                                                NewKey,
-                                                MembershipVector}},
-                                        Level})
-                        end)
-            end;
-
-        % HEAD--A--B--SelfKey-(-C--D-)-NewKey--E--F--TAIL
+            {Smaller, smaller};
         SelfKey < NewKey ->
-            case select_best(lists:nthtail(Level, Bigger), NewKey, bigger) of
-                % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
-                {'__none__', '__none__'} ->
-                    join_process_oneway_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
-                {'__self__'} ->
-                    join_process_oneway_1(SelfKey,
-                        {From,
-                            Server,
-                            NewKey,
-                            MembershipVector},
-                        Level);
+            {Bigger, bigger}
+    end,
+ 
+    case select_best(lists:nthtail(Level, Smaller), NewKey, smaller) of
+        % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
+        {'__none__', '__none__'} ->
+            join_process_oneway_1(SelfKey,
+                {From,
+                    Server,
+                    NewKey,
+                    MembershipVector},
+                Level);
+        {'__self__'} ->
+            join_process_oneway_1(SelfKey,
+                {From,
+                    Server,
+                    NewKey,
+                    MembershipVector},
+                Level);
 
-                % 最適なピアの探索を続ける(join-process-oneway-0)
-                {BestNode, BestKey} ->
-                    spawn(fun() ->
-                                gen_server:call(BestNode,
-                                    {BestKey,
-                                        {'join-process-oneway-0',
-                                            {From,
-                                                Server,
-                                                NewKey,
-                                                MembershipVector}},
-                                        Level})
-                        end)
-            end
+        % 最適なピアの探索を続ける(join-process-oneway-0)
+        {BestNode, BestKey} ->
+            spawn(fun() ->
+                        gen_server:call(BestNode,
+                            {BestKey,
+                                {'join-process-oneway-0',
+                                    {From,
+                                        Server,
+                                        NewKey,
+                                        MembershipVector}},
+                                Level})
+                end)
     end,
 
     {noreply, [InitialNode | Tail]};
