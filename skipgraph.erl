@@ -28,7 +28,7 @@ init(Arg) ->
     {ok, Arg}.
 
 
-handle_call({peer, random}, From, State) ->
+handle_call({peer, random}, _From, State) ->
     [{SelfKey, {_, _, _}} | _] = ets:tab2list('Peer'),
     {reply, {whereis(?MODULE), SelfKey}, State};
 
@@ -44,11 +44,18 @@ handle_call({get, Key0, Key1}, From, [InitialNode | Tail]) ->
                                 {ok, {'__none__', '__none__'}});
                         _ ->
                             {_, InitKey} = gen_server:call(InitialNode, {peer, random}),
-                            gen_server:call({InitKey, {'get-process-0', {Key0, Key1, From}}})
+                            gen_server:call(InitialNode,
+                                {InitKey,
+                                    {'get-process-0',
+                                        {Key0, Key1, From}}})
                     end;
+                
                 _ ->
                     [{SelfKey, {_, _, _}} | _] = PeerList,
-                    gen_server:call(?MODULE, {SelfKey, {'get-process-0', {Key0, Key1, From}}})
+                    gen_server:call(?MODULE,
+                        {SelfKey,
+                            {'get-process-0',
+                                {Key0, Key1, From}}})
             end
     end,
 
@@ -102,7 +109,11 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}}, _From, S
                         {'__none__', '__none__'} ->
                             gen_server:reply(From, {ok, ItemList});
                         _ ->
-                            gen_server:call(NextNode, {NextKey, {'get-process-1', {Key0, Key1, From}, ItemList}})
+                            gen_server:call(NextNode,
+                                {NextKey,
+                                    {'get-process-1',
+                                        {Key0, Key1, From},
+                                        ItemList}})
                     end;
                 
                 Key1 < SelfKey ->
@@ -114,7 +125,11 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}}, _From, S
                         {'__none__', '__none__'} ->
                             gen_server:reply(From, {ok, [{SelfKey, Value} | ItemList]});
                         _ ->
-                            gen_server:call(NextNode, {NextKey, {'get-process-1', {Key0, Key1, From}, [{SelfKey, Value} | ItemList]}})
+                            gen_server:call(NextNode,
+                                {NextKey,
+                                    {'get-process-1',
+                                        {Key0, Key1, From},
+                                        [{SelfKey, Value} | ItemList]}})
                     end
             end
     end,
@@ -274,7 +289,7 @@ handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, Membershi
             {Bigger, bigger}
     end,
  
-    case select_best(lists:nthtail(Level, Smaller), NewKey, smaller) of
+    case select_best(lists:nthtail(Level, Neighbor), NewKey, S_or_B) of
         % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
         {'__none__', '__none__'} ->
             join_process_oneway_1(SelfKey,
