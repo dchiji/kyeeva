@@ -596,6 +596,16 @@ update(SelfKey, {Server, NewKey}, Level) ->
     end.
 
 
+
+%%====================================================================
+%% Utilities
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% Function: select_best
+%% Description: select the best peer from a neighbor
+%% Returns: {'__none__', '__none__'} | {'__self__'} | {Node, Key}
+%%--------------------------------------------------------------------
 select_best([], _, _) ->
     {'__none__', '__none__'};
 select_best([{'__none__', '__none__'} | _], _, _) ->
@@ -659,7 +669,12 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
                 select_best([{Node1, Key1} | Tail], Key, S_or_B)
         end.
 
-
+ 
+%%--------------------------------------------------------------------
+%% Function: make membership vector
+%% Description: make membership vector
+%% Returns: <<1:1, N:1, M:1, ...>>
+%%--------------------------------------------------------------------
 make_membership_vector() ->
     make_membership_vector(<<1:1, (random:uniform(256) - 1):7>>, ?LEVEL_MAX / 8 - 1).
 
@@ -669,6 +684,16 @@ make_membership_vector(Bin, N) ->
     make_membership_vector(<<Bin/binary, (random:uniform(256) - 1):8>>, N - 1).
 
 
+
+%%====================================================================
+%% Interfaces
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% Function: join
+%% Description: join a new peer
+%% Returns: ok | {error, Reason}
+%%--------------------------------------------------------------------
 join(Key) ->
     join(Key, '__none__').
 
@@ -702,6 +727,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, N, OtherPeer) ->
             N}),
 
     case Result of
+        % 既に存在していた場合，そのピアにValueが上書きされる
         {exist, {Node, Key}} ->
             gen_server:call(Node, {Key, {put, Value}}),
             ok;
@@ -736,6 +762,12 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, N, OtherPeer) ->
     end.
 
 
+%%--------------------------------------------------------------------
+%% Function: join_oneway
+%% Description: when a neighbor is '__none__', this function join a
+%%              new peer through only an another
+%% Returns: ok | {error, Reason}
+%%--------------------------------------------------------------------
 join_oneway(_, _, _, _, ?LEVEL_MAX) ->
     ok;
 join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, N) ->
@@ -768,10 +800,20 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, N) ->
     end.
 
 
+%%--------------------------------------------------------------------
+%% Function: put
+%% Description: put value
+%% Returns: ok | {error, Reason}
+%%--------------------------------------------------------------------
 put(Key, Value) ->
-    gen_server:call(?MODULE, {put, Key, Value}).
+    join(Key, Value).
 
 
+%%--------------------------------------------------------------------
+%% Function: get
+%% Description: put value
+%% Returns: {ok, [{Key, Value}, ...]} | {error, Reason}
+%%--------------------------------------------------------------------
 get(Key) ->
     gen_server:call(?MODULE, {get, Key, Key}).
 
@@ -781,9 +823,19 @@ get(Key0, Key1) ->
     gen_server:call(?MODULE, {get, Key0, Key1}).
 
 
-get_server() ->
-    whereis(?MODULE).
-
-
+%%--------------------------------------------------------------------
+%% Function: test
+%% Description: show peers which the system has
+%% Returns:
+%%--------------------------------------------------------------------
 test() ->
     io:format("~nPeers = ~p~n", [ets:tab2list('Peer')]).
+
+
+%%--------------------------------------------------------------------
+%% Function: get
+%% Description: return pid of server
+%% Returns: pid()
+%%--------------------------------------------------------------------
+get_server() ->
+    whereis(?MODULE).
