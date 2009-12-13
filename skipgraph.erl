@@ -579,6 +579,17 @@ join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
     end.
 
 
+
+%%====================================================================
+%% Utilities
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% Function: update
+%% Description(ja): Neighbor[Level]を更新する
+%% Description(en): update Neighbor[Level]
+%% Returns: {'__none__', '__none__'} | {'__self__'} | {Node, Key}
+%%--------------------------------------------------------------------
 update(SelfKey, {Server, NewKey}, Level) ->
     [{SelfKey, {Value, MembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
     if
@@ -596,14 +607,10 @@ update(SelfKey, {Server, NewKey}, Level) ->
     end.
 
 
-
-%%====================================================================
-%% Utilities
-%%====================================================================
-
 %%--------------------------------------------------------------------
 %% Function: select_best
-%% Description: select the best peer from a neighbor
+%% Description(ja): Neighborの中から最適なピアを選択する
+%% Description(en): select the best peer from a neighbor
 %% Returns: {'__none__', '__none__'} | {'__self__'} | {Node, Key}
 %%--------------------------------------------------------------------
 select_best([], _, _) ->
@@ -672,7 +679,8 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
  
 %%--------------------------------------------------------------------
 %% Function: make membership vector
-%% Description: make membership vector
+%% Description(ja): MembershipVectorを生成する
+%% Description(en): make membership vector
 %% Returns: <<1:1, N:1, M:1, ...>>
 %%--------------------------------------------------------------------
 make_membership_vector() ->
@@ -691,7 +699,8 @@ make_membership_vector(Bin, N) ->
 
 %%--------------------------------------------------------------------
 %% Function: join
-%% Description: join a new peer
+%% Description(ja): 新しいピアをjoinする
+%% Description(en): join a new peer
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
 join(Key) ->
@@ -764,8 +773,10 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, N, OtherPeer) ->
 
 %%--------------------------------------------------------------------
 %% Function: join_oneway
-%% Description: when a neighbor is '__none__', this function join a
-%%              new peer through only an another
+%% Description(ja): 一方のNeighborが'__none__'のとき，もう一方のNeighborを
+%%                  通して新たなピアをjoinする
+%% Description(en): when a neighbor is '__none__', this function join a
+%%                  new peer through only an another
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
 join_oneway(_, _, _, _, ?LEVEL_MAX) ->
@@ -802,7 +813,8 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, N) ->
 
 %%--------------------------------------------------------------------
 %% Function: put
-%% Description: put value
+%% Description(ja): 値をputする
+%% Description(en): put value
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
 put(Key, Value) ->
@@ -811,7 +823,8 @@ put(Key, Value) ->
 
 %%--------------------------------------------------------------------
 %% Function: get
-%% Description: put value
+%% Description(ja): 値をgetする
+%% Description(en): get value
 %% Returns: {ok, [{Key, Value}, ...]} | {error, Reason}
 %%--------------------------------------------------------------------
 get(Key) ->
@@ -825,7 +838,8 @@ get(Key0, Key1) ->
 
 %%--------------------------------------------------------------------
 %% Function: test
-%% Description: show peers which the system has
+%% Description(ja): システムが持つ全てのピア情報を示す
+%% Description(en): show all peers which the system has
 %% Returns:
 %%--------------------------------------------------------------------
 test() ->
@@ -834,7 +848,8 @@ test() ->
 
 %%--------------------------------------------------------------------
 %% Function: get
-%% Description: return pid of server
+%% Description(ja): サーバのpidを返す
+%% Description(en): return pid of server
 %% Returns: pid()
 %%--------------------------------------------------------------------
 get_server() ->
