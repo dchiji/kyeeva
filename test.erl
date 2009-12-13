@@ -1,6 +1,7 @@
 -module(test).
 -export([test/0]).
 
+
 test() ->
     {ok, Server} = skipgraph:start('__none__'),
     io:format("~nResult: ~p~n", [{
@@ -8,6 +9,7 @@ test() ->
                 {get_test, get_test()},
                 {put_test, put_test()}}]),
     skipgraph:test().
+
 
 join_test() ->
     skipgraph:join(32),
@@ -27,11 +29,14 @@ join_test() ->
     skipgraph:join(1),
     ok.
 
+
 get_test() ->
     A = skipgraph:get(13),
     B = skipgraph:get(30, 50),
     C = skipgraph:get(0, 20),
     {A, B, C}.
 
+
 put_test() ->
     skipgraph:join(13, value).
+
