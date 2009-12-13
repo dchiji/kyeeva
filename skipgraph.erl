@@ -40,6 +40,7 @@ start(Initial) ->
     %     Smaller : [{Node, Key}, ...]
     %     Smaller : [{Node, Key}, ...]
     ets:new('Peer', [ordered_set, public, named_table]),
+    ets:new('Lock-Update-Daemon', [set, public, named_table]),
 
     case Initial of
         '__none__' ->
@@ -585,26 +586,70 @@ join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
 %%====================================================================
 
 %%--------------------------------------------------------------------
+%% Function: lock_update
+%% Description(ja): 任意のキーに対してlock_update_daemonプロセスを生成
+%%                  し，ロックされたupdateを行う
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+lock_update(Key, Func) ->
+    case ets:lookup('Lock-Update-Daemon', Key) of
+        [] ->
+            ets:insert('Lock-Update-Daemon', {Key, spawn(fun lock_update_daemon/0)}),
+            [{Key, Daemon}] = ets:lookup('Lock-Update-Daemon', Key),
+            Daemon ! {update, {Key, Func}};
+
+        [{Key, Daemon}] ->
+            Daemon ! {update, {Key, Func}}
+    end.
+
+
+%%--------------------------------------------------------------------
+%% Function: lock_update_daemon
+%% Description(ja): updateが並列に実行された際に競合を防ぐための排他的
+%%                  処理．キー毎に独立したプロセスとして常駐する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+lock_update_daemon() ->
+    receive
+        {update, {Key, Func}} ->
+            [Peer] = ets:lookup('Peer', Key),
+
+            case Func(Peer) of
+                {ok, Result} ->
+                    ets:insert('Peer', Result);
+                {error, _Reason} ->
+                    pass
+            end
+    end,
+
+    lock_update_daemon().
+
+%%--------------------------------------------------------------------
 %% Function: update
 %% Description(ja): Neighbor[Level]を更新する
 %% Description(en): update Neighbor[Level]
-%% Returns: {'__none__', '__none__'} | {'__self__'} | {Node, Key}
+%% Returns:
 %%--------------------------------------------------------------------
 update(SelfKey, {Server, NewKey}, Level) ->
-    [{SelfKey, {Value, MembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
-    if
-        NewKey < SelfKey ->
-            {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
+    F = fun({_, {Value, MembershipVector, {Smaller, Bigger}}}) ->
+            if
+                NewKey < SelfKey ->
+                    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
+ 
+                    NewSmaller = Front ++ [{Server, NewKey} | Tail],
+                    {ok, {SelfKey, {Value, MembershipVector, {NewSmaller, Bigger}}}};
 
-            NewSmaller = Front ++ [{Server, NewKey} | Tail],
-            ets:insert('Peer', {SelfKey, {Value, MembershipVector, {NewSmaller, Bigger}}});
+                SelfKey < NewKey ->
+                    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
 
-        SelfKey < NewKey ->
-            {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
+                    NewBigger = Front ++ [{Server, NewKey} | Tail],
+                    {ok, {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}}}
+            end
+    end,
 
-            NewBigger = Front ++ [{Server, NewKey} | Tail],
-            ets:insert('Peer', {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}})
-    end.
+    lock_update(SelfKey, F).
 
 
 %%--------------------------------------------------------------------
@@ -707,18 +752,25 @@ join(Key) ->
     join(Key, '__none__').
 
 join(Key, Value) ->
-    MembershipVector = make_membership_vector(),
-    Neighbor = {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
-                lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
-
-    case gen_server:call(whereis(?MODULE), {join, Key}) of
-        {ok, {'__none__', '__none__'}} ->
+    case ets:lookup('Peer', Key) of
+        [{Key, {_Value, MembershipVector, Neighbor}}] ->
             ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
             ok;
 
-        {ok, InitPeer} ->
-            ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
-            join(InitPeer, Key, Value, MembershipVector)
+        [] ->
+            MembershipVector = make_membership_vector(),
+            Neighbor = {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
+                        lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
+
+            case gen_server:call(whereis(?MODULE), {join, Key}) of
+                {ok, {'__none__', '__none__'}} ->
+                    ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
+                    ok;
+
+                {ok, InitPeer} ->
+                    ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
+                    join(InitPeer, Key, Value, MembershipVector)
+            end
     end.
 
 join(InitPeer, Key, Value, MembershipVector) ->
@@ -738,6 +790,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, N, OtherPeer) ->
     case Result of
         % 既に存在していた場合，そのピアにValueが上書きされる
         {exist, {Node, Key}} ->
+            ets:delete('Peer', Key),
             gen_server:call(Node, {Key, {put, Value}}),
             ok;
 
@@ -854,3 +907,5 @@ test() ->
 %%--------------------------------------------------------------------
 get_server() ->
     whereis(?MODULE).
+
+
