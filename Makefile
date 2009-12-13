@@ -14,9 +14,6 @@ all: compile
 
 compile: ${MODS:%=%.beam}
 
-speciall.beam: speciall.erl
-	${ERL} -Dflag1 -W0 speciall.erl
-
 test: compile
 	${ERL} -s test test
 
