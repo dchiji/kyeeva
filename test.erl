@@ -5,7 +5,9 @@ test() ->
     {ok, Server} = skipgraph:start('__none__'),
     io:format("~nResult: ~p~n", [{
                 {join_test, join_test()},
-                {get_test, get_test()}}]).
+                {get_test, get_test()},
+                {put_test, put_test()}}]),
+    skipgraph:test().
 
 join_test() ->
     skipgraph:join(32),
@@ -23,8 +25,6 @@ join_test() ->
     skipgraph:join(5),
     skipgraph:join(66),
     skipgraph:join(1),
-
-    skipgraph:test(),
     ok.
 
 get_test() ->
@@ -32,3 +32,6 @@ get_test() ->
     B = skipgraph:get(30, 50),
     C = skipgraph:get(0, 20),
     {A, B, C}.
+
+put_test() ->
+    skipgraph:join(13, value).

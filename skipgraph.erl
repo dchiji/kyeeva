@@ -25,9 +25,10 @@
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -module(skipgraph).
--export([start/1, init/1, handle_call/3, terminate/2, join/1, test/0, get/1, get/2, put/2, get_server/0]).
--export([make_membership_vector/0]).
 -behaviour(gen_server).
+-export([start/1, init/1, handle_call/3, terminate/2,
+        join/1, join/2, test/0, get/1, get/2, put/2,
+        get_server/0]).
 
 -define(LEVEL_MAX, 8).
 
@@ -57,6 +58,14 @@ init(Arg) ->
 handle_call({peer, random}, _From, State) ->
     [{SelfKey, {_, _, _}} | _] = ets:tab2list('Peer'),
     {reply, {whereis(?MODULE), SelfKey}, State};
+
+
+% Combine with join
+handle_call({SelfKey, {put, Value}}, _From, State) ->
+    [{SelfKey, {_Value, MembershipVector, Neighbor}}] = ets:lookup('Peer', SelfKey),
+    ets:insert('Peer', {SelfKey, {Value, MembershipVector, Neighbor}}),
+
+    {reply, ok, State};
 
 
 handle_call({get, Key0, Key1}, From, [InitialNode | Tail]) ->
@@ -208,6 +217,15 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Le
 
 
 % 最もNewKeyに近いピアを(内側に向かって)探索する
+
+handle_call({SelfKey, {'join-process-0', {From, _Server, NewKey, _MembershipVector}}, _Level},
+    _From,
+    State)
+when SelfKey == NewKey ->
+ 
+    gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
+    {noreply, State};
+
 handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
@@ -302,9 +320,18 @@ handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVecto
 
 
 % 最もNewKeyに近いピアを(内側に向かって)探索する
+ 
+handle_call({SelfKey, {'join-process-oneway-0', {From, _Server, NewKey, _MembershipVector}}, _Level},
+    _From,
+    State)
+when NewKey == SelfKey ->
+
+    gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
+    {noreply, State};
+
 handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
-    [InitialNode | Tail]) ->
+    State) ->
 
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -346,7 +373,7 @@ handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, Membershi
                 end)
     end,
 
-    {noreply, [InitialNode | Tail]};
+    {noreply, State};
 
 
 handle_call({SelfKey, {'join-process-oneway-1', {From, Server, NewKey, MembershipVector}}, Level},
@@ -643,25 +670,29 @@ make_membership_vector(Bin, N) ->
 
 
 join(Key) ->
+    join(Key, '__none__').
+
+join(Key, Value) ->
     MembershipVector = make_membership_vector(),
     Neighbor = {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
                 lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
 
     case gen_server:call(whereis(?MODULE), {join, Key}) of
         {ok, {'__none__', '__none__'}} ->
-            ets:insert('Peer', {Key, {'value', MembershipVector, Neighbor}}),
+            ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
             ok;
+
         {ok, InitPeer} ->
-            ets:insert('Peer', {Key, {'value', MembershipVector, Neighbor}}),
-            join(InitPeer, Key, MembershipVector)
+            ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
+            join(InitPeer, Key, Value, MembershipVector)
     end.
 
-join(InitPeer, Key, MembershipVector) ->
-    join(InitPeer, Key, MembershipVector, 0, {'__none__', '__none__'}).
+join(InitPeer, Key, Value, MembershipVector) ->
+    join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}).
 
-join(_, _, _, ?LEVEL_MAX, _) ->
+join(_, _, _, _, ?LEVEL_MAX, _) ->
     ok;
-join({InitNode, InitKey}, NewKey, MembershipVector, N, OtherPeer) ->
+join({InitNode, InitKey}, NewKey, Value, MembershipVector, N, OtherPeer) ->
     Result = gen_server:call(InitNode,
         {InitKey,
             {'join-process-0',
@@ -671,28 +702,32 @@ join({InitNode, InitKey}, NewKey, MembershipVector, N, OtherPeer) ->
             N}),
 
     case Result of
+        {exist, {Node, Key}} ->
+            gen_server:call(Node, {Key, {put, Value}}),
+            ok;
+
         {ok, {'__none__', '__none__'}, {'__none__', '__none__'}} ->
             ok;
 
         {ok, {'__none__', '__none__'}, BiggerPeer} ->
             update(NewKey, BiggerPeer, N),
-            join_oneway(BiggerPeer, NewKey, MembershipVector, N + 1);
+            join_oneway(BiggerPeer, NewKey, Value, MembershipVector, N + 1);
 
         {ok, SmallerPeer, {'__none__', '__none__'}} ->
             update(NewKey, SmallerPeer, N),
-            join_oneway(SmallerPeer, NewKey, MembershipVector, N + 1);
+            join_oneway(SmallerPeer, NewKey, Value, MembershipVector, N + 1);
 
         {ok, SmallerPeer, BiggerPeer} ->
             update(NewKey, SmallerPeer, N),
             update(NewKey, BiggerPeer, N),
-            join(SmallerPeer, NewKey, MembershipVector, N + 1, BiggerPeer);
+            join(SmallerPeer, NewKey, Value, MembershipVector, N + 1, BiggerPeer);
 
         {error, mismatch} ->
             case OtherPeer of
                 {'__none__', '__none__'} ->
                     ok;
                 _ ->
-                    join_oneway(OtherPeer, NewKey, MembershipVector, N)
+                    join_oneway(OtherPeer, NewKey, Value, MembershipVector, N)
             end;
 
         Message ->
@@ -701,9 +736,9 @@ join({InitNode, InitKey}, NewKey, MembershipVector, N, OtherPeer) ->
     end.
 
 
-join_oneway(_, _, _, ?LEVEL_MAX) ->
+join_oneway(_, _, _, _, ?LEVEL_MAX) ->
     ok;
-join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
+join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, N) ->
     Result = gen_server:call(InitNode,
         {InitKey,
             {'join-process-oneway-0',
@@ -713,12 +748,16 @@ join_oneway({InitNode, InitKey}, NewKey, MembershipVector, N) ->
             N}),
 
     case Result of
+        {exist, {Node, Key}} ->
+            gen_server:call(Node, {Key, {put, Value}}),
+            ok;
+
         {ok, {'__none__', '__none__'}} ->
             ok;
 
         {ok, Peer} ->
             update(NewKey, Peer, N),
-            join_oneway(Peer, NewKey, MembershipVector, N + 1);
+            join_oneway(Peer, NewKey, Value, MembershipVector, N + 1);
 
         {error, mismatch} ->
             ok;
