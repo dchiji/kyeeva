@@ -1,5 +1,6 @@
 -module(test).
 -export([test/0]).
+-export([mv_test/0]).
 
 
 test() ->
@@ -10,24 +11,14 @@ test() ->
                 {put_test, put_test()}}]),
     skipgraph:test().
 
-
 join_test() ->
-    skipgraph:join(32),
-    skipgraph:join(48),
-    skipgraph:join(28),
-    skipgraph:join(3),
-    skipgraph:join(52),
-    skipgraph:join(98),
-    skipgraph:join(10),
-    skipgraph:join(2),
-    skipgraph:join(13),
-    skipgraph:join(29),
-    skipgraph:join(50),
-    skipgraph:join(31),
-    skipgraph:join(5),
-    skipgraph:join(66),
-    skipgraph:join(1),
-    ok.
+    join_test(0, 1000).
+
+join_test(N, N) ->
+    ok;
+join_test(N, M) ->
+    skipgraph:join(N),
+    join_test(N + 1, M).
 
 
 get_test() ->
@@ -39,4 +30,20 @@ get_test() ->
 
 put_test() ->
     skipgraph:join(13, value).
+
+
+mv_test() ->
+    lists:map(fun(_) -> mv() end, lists:duplicate(30, 0)).
+
+mv() ->
+    mv(skipgraph:make_membership_vector(), 8 - 1),
+    io:format("~n").
+
+mv(MV, -1) ->
+    ok;
+mv(MV, N) ->
+    M = 8 - N - 1,
+    <<_:M, Bit:1, Tail:N>> = MV,
+    io:format("~p ", [Bit]),
+    mv(<<Tail>>, N - 1).
 

@@ -29,8 +29,13 @@
 -export([start/1, init/1, handle_call/3, terminate/2,
         join/1, join/2, test/0, get/1, get/2, put/2,
         get_server/0]).
+-export([make_membership_vector/0]).
 
 -define(LEVEL_MAX, 8).
+%-define(LEVEL_MAX, 16).
+%-define(LEVEL_MAX, 32).
+%-define(LEVEL_MAX, 64).
+%-define(LEVEL_MAX, 128).
 
 
 %%--------------------------------------------------------------------
@@ -625,8 +630,8 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
-    <<_:Level, Bit:1, _:TailN>> = MembershipVector,
-    <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
+    <<_:TailN, Bit:1, _:Level>> = MembershipVector,
+    <<_:TailN, SelfBit:1, _:Level>> = SelfMembershipVector,
 
     case Bit of
         SelfBit ->
@@ -773,8 +778,8 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
-    <<_:Level, Bit:1, _:TailN>> = MembershipVector,
-    <<_:Level, SelfBit:1, _:TailN>> = SelfMembershipVector,
+    <<_:TailN, Bit:1, _:Level>> = MembershipVector,
+    <<_:TailN, SelfBit:1, _:Level>> = SelfMembershipVector,
 
     case Bit of
         SelfBit ->
@@ -986,7 +991,14 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
 %% Returns: <<1:1, N:1, M:1, ...>>
 %%--------------------------------------------------------------------
 make_membership_vector() ->
-    make_membership_vector(<<1:1, (random:uniform(256) - 1):7>>, ?LEVEL_MAX / 8 - 1).
+    N = random:uniform(256) - 1,
+    case N rem 2 of
+        1 ->
+            make_membership_vector(<<N>>, ?LEVEL_MAX / 8 - 1);
+        0 ->
+            M = N - 1,
+            make_membership_vector(<<M>>, ?LEVEL_MAX / 8 - 1)
+    end.
 
 make_membership_vector(Bin, 0.0) ->
     Bin;
