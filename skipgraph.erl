@@ -33,6 +33,12 @@
 -define(LEVEL_MAX, 8).
 
 
+%%--------------------------------------------------------------------
+%% Function: start
+%% Description(ja): 初期化を行い，gen_serverを起動する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 start(Initial) ->
     % {Key, {Value, MembershipVector, Neighbor}}
     %   MembershipVector : <<1, 0, 1, 1, ...>>
@@ -44,24 +50,49 @@ start(Initial) ->
 
     case Initial of
         '__none__' ->
-            gen_server:start_link({local, ?MODULE}, ?MODULE, ['__none__', make_membership_vector()], [{debug, [trace, log]}]);
+%            gen_server:start_link({local, ?MODULE}, ?MODULE, ['__none__', make_membership_vector()], [{debug, [trace, log]}]);
+            gen_server:start_link({local, ?MODULE}, ?MODULE, ['__none__', make_membership_vector()], []);
 
         _ ->
             InitialNode = rpc:call(Initial, skipgraph, get_server, []),
-            gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, make_membership_vector()], [{debug, [trace, log]}])
+%            gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, make_membership_vector()], [{debug, [trace, log]}])
+            gen_server:start_link({local, ?MODULE}, ?MODULE, ['__none__', make_membership_vector()], [])
     end.
 
 
+%%--------------------------------------------------------------------
+%% Function: init
+%% Description(ja): gen_server:start_linkにより呼び出される．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 init(Arg) ->
     {ok, Arg}.
 
 
+
+%%====================================================================
+%% Gen_server:Handle_call Function
+%%====================================================================
+
+%%--------------------------------------------------------------------
+%% Function: handle_call (peer)
+%% Description(ja): ネットワーク先のノードから呼び出される．適当なピアを
+%%                  呼び出し元に返す．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({peer, random}, _From, State) ->
     [{SelfKey, {_, _, _}} | _] = ets:tab2list('Peer'),
     {reply, {whereis(?MODULE), SelfKey}, State};
 
 
-% Combine with join
+%%--------------------------------------------------------------------
+%% Function: handle_call (put)
+%% Description(ja): ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {put, Value}}, _From, State) ->
     [{SelfKey, {_Value, MembershipVector, Neighbor}}] = ets:lookup('Peer', SelfKey),
     ets:insert('Peer', {SelfKey, {Value, MembershipVector, Neighbor}}),
@@ -69,6 +100,13 @@ handle_call({SelfKey, {put, Value}}, _From, State) ->
     {reply, ok, State};
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call (get)
+%% Description(ja): getメッセージを受信し、適当なローカルピア(無ければ
+%%                  グローバルピア)を選択して，get_process_0に繋げる．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({get, Key0, Key1}, From, [InitialNode | Tail]) ->
     F = fun() ->
             PeerList = ets:tab2list('Peer'),
@@ -99,6 +137,12 @@ handle_call({get, Key0, Key1}, From, [InitialNode | Tail]) ->
     {noreply, [InitialNode | Tail]};
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call (get-process-0)
+%% Description(ja): 最適なピアを探索する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}}, _From, State) ->
     F = fun() ->
             [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
@@ -136,6 +180,12 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}}, _From, State) ->
     {noreply, State};
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call (get-process-1)
+%% Description(ja): 指定された範囲内を走査し，値を収集する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}}, _From, State) ->
     F = fun() ->
             if
@@ -174,7 +224,13 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}}, _From, S
     {noreply, State};
 
 
-% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す
+%%--------------------------------------------------------------------
+%% Function: handle_call (join)
+%% Description(ja): joinメッセージを受信し、適当なローカルピア(無ければ
+%%                  グローバルピア)を返す．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({join, NewKey}, From, [InitialNode | Tail]) ->
     F = fun() ->
             PeerList = ets:tab2list('Peer'),
@@ -200,6 +256,12 @@ handle_call({join, NewKey}, From, [InitialNode | Tail]) ->
     {noreply, [InitialNode | Tail]};
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call (join-process-0)
+%% Description(ja): join-process-0にFromを渡して再度呼ぶ．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Level},
     From,
     State) ->
@@ -217,9 +279,13 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Le
     {noreply, State};
 
 
-% 最もNewKeyに近いピアを(内側に向かって)探索する
-
-handle_call({SelfKey, {'join-process-0', {From, _Server, NewKey, _MembershipVector}}, _Level},
+%%--------------------------------------------------------------------
+%% Function: handle_call (join-process-0)
+%% Description(ja): 最もNewKeyに近いピアを(内側に向かって)探索する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'join-process-0', {From, _Server, NewKey, _MembershipVector}}, 0},
     _From,
     State)
 when SelfKey == NewKey ->
@@ -241,7 +307,8 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
     end,
 
     case select_best(lists:nthtail(Level, Neighbor), NewKey, S_or_B) of
-        % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
+        % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行．
+        % 他の処理をlockしておくために関数として(join_process_1フェーズへ)移行する．
         {'__none__', '__none__'} ->
             join_process_1(SelfKey,
                 {From,
@@ -274,6 +341,13 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
     {noreply, State};
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call (join-process-1)
+%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
+%%                  join_process_1を，他の処理をlockして呼び出す．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
@@ -282,6 +356,113 @@ handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector
     {reply, '__none__', State};
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call (join-process-0-oneway)
+%% Description(ja): handle_call(join-process-0-oneway)にFromを渡す
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MembershipVector}}, Level},
+    From,
+    State) ->
+
+    spawn(fun() ->
+                gen_server:call(whereis(?MODULE),
+                    {SelfKey,
+                        {'join-process-0-oneway',
+                            {From,
+                                Server,
+                                NewKey,
+                                MembershipVector}},
+                        Level})
+        end),
+    {noreply, State};
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_call (join-process-0-oneway)
+%% Description(ja): 基本はhandle_call(join-process-0)と同じだが，
+%%                  join_process_1_oneway/3関数を呼び出す
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'join-process-0-oneway', {From, _Server, NewKey, _MembershipVector}}, _Level},
+    _From,
+    State)
+when NewKey == SelfKey ->
+
+    gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
+    {noreply, State};
+
+handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MembershipVector}}, Level},
+    _From,
+    State) ->
+
+    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
+    {Neighbor, S_or_B} = if
+        NewKey < SelfKey ->
+            {Smaller, smaller};
+        SelfKey < NewKey ->
+            {Bigger, bigger}
+    end,
+ 
+    case select_best(lists:nthtail(Level, Neighbor), NewKey, S_or_B) of
+        % 最適なピアが見つかったので、次のフェーズ(join_process_1_oneway)へ移行．
+        % 他の処理をlockしておくために関数として(join_process_1_onewayフェーズへ)移行する．
+        {'__none__', '__none__'} ->
+            join_process_1_oneway(SelfKey,
+                {From,
+                    Server,
+                    NewKey,
+                    MembershipVector},
+                Level);
+        {'__self__'} ->
+            join_process_1_oneway(SelfKey,
+                {From,
+                    Server,
+                    NewKey,
+                    MembershipVector},
+                Level);
+
+        % 最適なピアの探索を続ける(join-process-0-oneway)
+        {BestNode, BestKey} ->
+            spawn(fun() ->
+                        gen_server:call(BestNode,
+                            {BestKey,
+                                {'join-process-0-oneway',
+                                    {From,
+                                        Server,
+                                        NewKey,
+                                        MembershipVector}},
+                                Level})
+                end)
+    end,
+
+    {noreply, State};
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_call (join-process-1-oneway)
+%% Description(ja): join_process_1_oneway/3関数を呼び出す．ローカルから
+%%                  このコールバック関数を呼び出すことはほとんどない．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, MembershipVector}}, Level},
+    _From,
+    State) ->
+
+    join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level),
+    {reply, '__none__', State};
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_call (join-process-2)
+%% Description(ja): ローカルで呼び出すことはない．Neighborをupdateする．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     _From,
     State) ->
@@ -300,96 +481,15 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
                     Other})
     end,
 
-    {reply, '__none__', State};
+    {reply, '__none__', State}.
 
 
-handle_call({SelfKey, {'join-process-oneway-0', {Server, NewKey, MembershipVector}}, Level},
-    From,
-    State) ->
-
-    spawn(fun() ->
-                gen_server:call(whereis(?MODULE),
-                    {SelfKey,
-                        {'join-process-oneway-0',
-                            {From,
-                                Server,
-                                NewKey,
-                                MembershipVector}},
-                        Level})
-        end),
-    {noreply, State};
-
-
-% 最もNewKeyに近いピアを(内側に向かって)探索する
- 
-handle_call({SelfKey, {'join-process-oneway-0', {From, _Server, NewKey, _MembershipVector}}, _Level},
-    _From,
-    State)
-when NewKey == SelfKey ->
-
-    gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
-    {noreply, State};
-
-handle_call({SelfKey, {'join-process-oneway-0', {From, Server, NewKey, MembershipVector}}, Level},
-    _From,
-    State) ->
-
-    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
-
-    {Neighbor, S_or_B} = if
-        NewKey < SelfKey ->
-            {Smaller, smaller};
-        SelfKey < NewKey ->
-            {Bigger, bigger}
-    end,
- 
-    case select_best(lists:nthtail(Level, Neighbor), NewKey, S_or_B) of
-        % 最適なピアが見つかったので、次のフェーズ(join_process_1)へ移行
-        {'__none__', '__none__'} ->
-            join_process_oneway_1(SelfKey,
-                {From,
-                    Server,
-                    NewKey,
-                    MembershipVector},
-                Level);
-        {'__self__'} ->
-            join_process_oneway_1(SelfKey,
-                {From,
-                    Server,
-                    NewKey,
-                    MembershipVector},
-                Level);
-
-        % 最適なピアの探索を続ける(join-process-oneway-0)
-        {BestNode, BestKey} ->
-            spawn(fun() ->
-                        gen_server:call(BestNode,
-                            {BestKey,
-                                {'join-process-oneway-0',
-                                    {From,
-                                        Server,
-                                        NewKey,
-                                        MembershipVector}},
-                                Level})
-                end)
-    end,
-
-    {noreply, State};
-
-
-handle_call({SelfKey, {'join-process-oneway-1', {From, Server, NewKey, MembershipVector}}, Level},
-    _From,
-    State) ->
-
-    join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level),
-    {reply, '__none__', State};
-
-
-handle_call(Message, _From, State) ->
-    io:format("*ERR* Not support message: ~p~n", [Message]),
-    {noreply, State}.
-
-
+%%--------------------------------------------------------------------
+%% Function: terminate
+%% Description(ja): gen_server内でエラーが発生したとき，再起動させる．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 terminate(_Reason, State) ->
     spawn(fun() ->
                 unregister(?MODULE),
@@ -398,8 +498,13 @@ terminate(_Reason, State) ->
     ok.
 
 
-% MembershipVector[Level]が一致するピアを外側に向かって探索．
-% 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
+%%--------------------------------------------------------------------
+%% Function: join_process_1
+%% Description(ja): MembershipVector[Level]が一致するピアを外側に向かって探索．
+%%                  成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
@@ -525,9 +630,14 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     end.
 
 
-% MembershipVector[Level]が一致するピアを外側に向かって探索．
-% 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
-join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
+%%--------------------------------------------------------------------
+%% Function: join_process_1_oneway
+%% Description(ja): 基本はjoin_process_1/3関数と同じだが，片方向にしか
+%%                  探索しない．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -551,7 +661,7 @@ join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
                             spawn(fun() ->
                                         gen_server:call(NextNode,
                                             {NextKey,
-                                                {'join-process-oneway-1',
+                                                {'join-process-1-oneway',
                                                     {From,
                                                         Server,
                                                         NewKey,
@@ -568,7 +678,7 @@ join_process_oneway_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
                             spawn(fun() ->
                                         gen_server:call(NextNode,
                                             {NextKey,
-                                                {'join-process-oneway-1',
+                                                {'join-process-1-oneway',
                                                     {From,
                                                         Server,
                                                         NewKey,
@@ -787,6 +897,8 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, N, OtherPeer) ->
                     MembershipVector}},
             N}),
 
+    io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, N, Result]),
+
     case Result of
         % 既に存在していた場合，そのピアにValueが上書きされる
         {exist, {Node, Key}} ->
@@ -837,11 +949,13 @@ join_oneway(_, _, _, _, ?LEVEL_MAX) ->
 join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, N) ->
     Result = gen_server:call(InitNode,
         {InitKey,
-            {'join-process-oneway-0',
+            {'join-process-0-oneway',
                 {whereis(?MODULE),
                     NewKey,
                     MembershipVector}},
             N}),
+
+    io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, N, Result]),
 
     case Result of
         {exist, {Node, Key}} ->
@@ -907,5 +1021,4 @@ test() ->
 %%--------------------------------------------------------------------
 get_server() ->
     whereis(?MODULE).
-
 
