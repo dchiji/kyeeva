@@ -27,6 +27,7 @@
 -module(skipgraph).
 -behaviour(gen_server).
 -export([start/1, init/1, handle_call/3, terminate/2,
+        handle_cast/2, handle_info/2, code_change/3,
         join/1, join/2, test/0, get/1, get/2, put/2,
         get_server/0]).
 -export([make_membership_vector/0]).
@@ -77,7 +78,7 @@ init(Arg) ->
 
 
 %%====================================================================
-%% Gen_server:Handle_call Function
+%% gen_server callbacks
 %%====================================================================
 
 %%--------------------------------------------------------------------
@@ -99,7 +100,7 @@ handle_call({peer, random}, _From, State) ->
 %% Returns:
 %%--------------------------------------------------------------------
 handle_call({SelfKey, {put, Value}}, _From, State) ->
-    F = fun({SelfKey, {_Value, MembershipVector, Neighbor}}) ->
+    F = fun({_SelfKey, {_Value, MembershipVector, Neighbor}}) ->
             {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
     end,
 
@@ -607,20 +608,6 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
 
 
 %%--------------------------------------------------------------------
-%% Function: terminate
-%% Description(ja): gen_server内でエラーが発生したとき，再起動させる．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
-terminate(_Reason, State) ->
-    spawn(fun() ->
-                unregister(?MODULE),
-                gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
-        end),
-    ok.
-
-
-%%--------------------------------------------------------------------
 %% Function: join_process_1
 %% Description(ja): MembershipVector[Level]が一致するピアを外側に向かって探索．
 %%                  成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
@@ -844,6 +831,50 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
     end.
 
 
+%%--------------------------------------------------------------------
+%% Function: terminate
+%% Description(ja): gen_server内でエラーが発生したとき，再起動させる．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+terminate(_Reason, State) ->
+    spawn(fun() ->
+                unregister(?MODULE),
+                gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
+        end),
+    ok.
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_cast
+%% Description(ja): 何もしない
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_cast(_Message, State) ->
+    {noreply, State}.
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_info
+%% Description(ja): 何もしない
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+
+%%--------------------------------------------------------------------
+%% Function: code_change
+%% Description(ja): 何もしない
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+code_change(_OldVsn, State, _NewVsn) ->
+    {ok, State}.
+
+
 
 %%====================================================================
 %% Utilities
@@ -1024,7 +1055,7 @@ join(Key) ->
 
 join(Key, Value) ->
     case ets:lookup('Peer', Key) of
-        [{Key, {_Value, MembershipVector, Neighbor}}] ->
+        [{Key, {_, _, _}}] ->
             F = fun({SelfKey, {_Value, MembershipVector, Neighbor}}) ->
                     {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
             end,
@@ -1128,6 +1159,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, N) ->
     case Result of
         {exist, {Node, Key}} ->
             ets:delete('Peer', Key),
+            ets:delete('Lock-Update-Daemon', Key),
             gen_server:call(Node, {Key, {put, Value}}),
             ok;
 
