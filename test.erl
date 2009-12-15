@@ -12,7 +12,7 @@ test() ->
     skipgraph:test().
 
 join_test() ->
-    join_test(0, 1000).
+    join_test(0, 100).
 
 join_test(N, N) ->
     ok;
@@ -29,7 +29,7 @@ get_test() ->
 
 
 put_test() ->
-    skipgraph:join(13, value).
+    skipgraph:join(93, value).
 
 
 mv_test() ->
