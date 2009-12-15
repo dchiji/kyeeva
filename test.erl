@@ -36,14 +36,14 @@ mv_test() ->
     lists:map(fun(_) -> mv() end, lists:duplicate(30, 0)).
 
 mv() ->
-    mv(skipgraph:make_membership_vector(), 8 - 1),
+    mv(skipgraph:make_membership_vector(), 32 - 1),
     io:format("~n").
 
 mv(MV, -1) ->
     ok;
 mv(MV, N) ->
-    M = 8 - N - 1,
+    M = 32 - N - 1,
     <<_:M, Bit:1, Tail:N>> = MV,
     io:format("~p ", [Bit]),
-    mv(<<Tail>>, N - 1).
+    mv(MV, N - 1).
 

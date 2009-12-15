@@ -1018,7 +1018,7 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
 
  
 %%--------------------------------------------------------------------
-%% Function: make membership vector
+%% Function: make_membership_vector
 %% Description(ja): MembershipVectorを生成する
 %% Description(en): make membership vector
 %% Returns: <<1:1, N:1, M:1, ...>>
@@ -1036,7 +1036,7 @@ make_membership_vector() ->
 make_membership_vector(Bin, 0.0) ->
     Bin;
 make_membership_vector(Bin, N) ->
-    make_membership_vector(<<Bin/binary, (random:uniform(256) - 1):8>>, N - 1).
+    make_membership_vector(<<(random:uniform(256) - 1):8, Bin/binary>>, N - 1).
 
 
 
