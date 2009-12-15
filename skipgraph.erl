@@ -31,9 +31,9 @@
         get_server/0]).
 -export([make_membership_vector/0]).
 
--define(LEVEL_MAX, 8).
+%-define(LEVEL_MAX, 8).
 %-define(LEVEL_MAX, 16).
-%-define(LEVEL_MAX, 32).
+-define(LEVEL_MAX, 32).
 %-define(LEVEL_MAX, 64).
 %-define(LEVEL_MAX, 128).
 
@@ -99,9 +99,11 @@ handle_call({peer, random}, _From, State) ->
 %% Returns:
 %%--------------------------------------------------------------------
 handle_call({SelfKey, {put, Value}}, _From, State) ->
-    [{SelfKey, {_Value, MembershipVector, Neighbor}}] = ets:lookup('Peer', SelfKey),
-    ets:insert('Peer', {SelfKey, {Value, MembershipVector, Neighbor}}),
+    F = fun({SelfKey, {_Value, MembershipVector, Neighbor}}) ->
+            {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
+    end,
 
+    lock_update(SelfKey, F),
     {reply, ok, State};
 
 
@@ -1023,7 +1025,11 @@ join(Key) ->
 join(Key, Value) ->
     case ets:lookup('Peer', Key) of
         [{Key, {_Value, MembershipVector, Neighbor}}] ->
-            ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
+            F = fun({SelfKey, {_Value, MembershipVector, Neighbor}}) ->
+                    {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
+            end,
+
+            lock_update(Key, F),
             ok;
 
         [] ->
@@ -1034,10 +1040,12 @@ join(Key, Value) ->
             case gen_server:call(whereis(?MODULE), {join, Key}) of
                 {ok, {'__none__', '__none__'}} ->
                     ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
+                    ets:insert('Lock-Update-Daemon', {Key, spawn(fun lock_update_daemon/0)}),
                     ok;
 
                 {ok, InitPeer} ->
                     ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
+                    ets:insert('Lock-Update-Daemon', {Key, spawn(fun lock_update_daemon/0)}),
                     join(InitPeer, Key, Value, MembershipVector)
             end
     end.
@@ -1062,6 +1070,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, N, OtherPeer) ->
         % 既に存在していた場合，そのピアにValueが上書きされる
         {exist, {Node, Key}} ->
             ets:delete('Peer', Key),
+            ets:delete('Lock-Update-Daemon', Key),
             gen_server:call(Node, {Key, {put, Value}}),
             ok;
 
