@@ -241,26 +241,24 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}}, _From, S
 %% Returns:
 %%--------------------------------------------------------------------
 handle_call({join, NewKey}, From, [InitialNode | Tail]) ->
-    F = fun() ->
-            PeerList = ets:tab2list('Peer'),
-            case PeerList of
-                [] ->
-                    case InitialNode of
-                        '__none__' ->
-                            gen_server:reply(From,
-                                {ok, {'__none__', '__none__'}});
-                        _ ->
-                            {_, Key} = gen_server:call(InitialNode, {peer, random}),
-                            gen_server:reply(From, {ok, {InitialNode, Key}})
-                    end;
+    PeerList = ets:tab2list('Peer'),
 
+    case PeerList of
+        [] ->
+            case InitialNode of
+                '__none__' ->
+                    gen_server:reply(From,
+                        {ok, {'__none__', '__none__'}});
                 _ ->
-                    [{SelfKey, {_, _, _}} | _] = PeerList,
-                    gen_server:reply(From, {ok, {whereis(?MODULE), SelfKey}})
-            end
+                    {_, Key} = gen_server:call(InitialNode, {peer, random}),
+                    gen_server:reply(From, {ok, {InitialNode, Key}})
+            end;
+
+        _ ->
+            [{SelfKey, {_, _, _}} | _] = PeerList,
+            gen_server:reply(From, {ok, {whereis(?MODULE), SelfKey}})
     end,
 
-    spawn(F),
     {noreply, [InitialNode | Tail]};
 
 
@@ -392,7 +390,7 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
                 _ ->
                     % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
                     {BestNode, BestKey} = select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B),
-                    io:format("BestKey=~p~n", [BestKey]),
+                    %io:format("BestKey=~p~n", [BestKey]),
 
                     spawn(fun() ->
                                 gen_server:call(BestNode,
@@ -547,8 +545,9 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, Membershi
 
                 _ ->
                     % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
+                    %io:format("~nSelfKey=~p, NewKey=~p~nLevel=~p, S_or_B=~p~nNeighbor=~p~n", [SelfKey, NewKey, Level, S_or_B, Neighbor]),
+                    %io:format("Peer(NewKey)=~p~n", [ets:lookup('Peer', NewKey)]),
                     {BestNode, BestKey} = select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B),
-                    io:format("BestKey=~p~n", [BestKey]),
 
                     spawn(fun() ->
                                 gen_server:call(BestNode,
@@ -670,18 +669,18 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                         {OtherNode, OtherKey} ->
                             Self = whereis(?MODULE),
                             case OtherNode of
-                                % 自分自身の場合，ロックされる可能性がある
+                                % 自分自身の場合，直接update関数を呼び出す
                                 Self ->
-                                    spawn(fun() ->
-                                                gen_server:call(OtherNode,
-                                                    {OtherKey,
-                                                        {'join-process-2',
-                                                            {From,
-                                                                Server,
-                                                                NewKey}},
-                                                        Level,
-                                                        {whereis(?MODULE), SelfKey}})
-                                        end);
+                                    io:format("OtherKey=~p NewKey=~p~n", [OtherKey, NewKey]),
+                                    update(OtherKey, {Server, NewKey}, Level),
+                                    update(SelfKey, {Server, NewKey}, Level),
+                                    if
+                                        NewKey < SelfKey ->
+                                            gen_server:reply(From, {ok, {Self, OtherKey}, {Self, SelfKey}});
+                                        SelfKey < NewKey ->
+                                            gen_server:reply(From, {ok, {Self, SelfKey}, {Self, OtherKey}})
+                                    end;
+
                                 _ ->
                                     gen_server:call(OtherNode,
                                         {OtherKey,
@@ -690,9 +689,9 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                                     Server,
                                                     NewKey}},
                                             Level,
-                                            {whereis(?MODULE), SelfKey}})
-                            end,
-                            update(SelfKey, {Server, NewKey}, Level)
+                                            {whereis(?MODULE), SelfKey}}),
+                                    update(SelfKey, {Server, NewKey}, Level)
+                            end
                     end
             end;
 
@@ -830,6 +829,7 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
 %%--------------------------------------------------------------------
 terminate(_Reason, State) ->
     spawn(fun() ->
+                test(),
                 unregister(?MODULE),
                 gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
         end),
@@ -889,7 +889,11 @@ lock_update(Table, Key, Func) ->
             Daemon ! {update, Table, {Key, Func}};
 
         [{Key, Daemon}] ->
-            Daemon ! {update, Table, {Key, Func}}
+            Ref = make_ref(),
+            Daemon ! {{self(), Ref}, {update, Table, {Key, Func}}},
+            receive
+                {Ref, ok} -> ok
+            end
     end.
 
 
@@ -902,7 +906,7 @@ lock_update(Table, Key, Func) ->
 %%--------------------------------------------------------------------
 lock_update_daemon() ->
     receive
-        {update, Table, {Key, Func}} ->
+        {{From, Ref}, {update, Table, {Key, Func}}} ->
             [Item] = ets:lookup(Table, Key),
 
             case Func(Item) of
@@ -910,7 +914,8 @@ lock_update_daemon() ->
                     ets:insert(Table, Result);
                 {error, _Reason} ->
                     pass
-            end
+            end,
+            From ! {Ref, ok}
     end,
 
     lock_update_daemon().
@@ -923,17 +928,20 @@ lock_update_daemon() ->
 %%--------------------------------------------------------------------
 update(SelfKey, {Server, NewKey}, Level) ->
     F = fun({_, {Value, MembershipVector, {Smaller, Bigger}}}) ->
+            io:format("NewKey=~p  SelfKey=~p~n", [NewKey, SelfKey]),
             if
                 NewKey < SelfKey ->
                     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
  
                     NewSmaller = Front ++ [{Server, NewKey} | Tail],
+                    io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
                     {ok, {SelfKey, {Value, MembershipVector, {NewSmaller, Bigger}}}};
 
                 SelfKey < NewKey ->
                     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
 
                     NewBigger = Front ++ [{Server, NewKey} | Tail],
+                    io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, bigger]),
                     {ok, {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}}}
             end
     end,
@@ -1018,6 +1026,9 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
 %% Returns: <<1:1, N:1, M:1, ...>>
 %%--------------------------------------------------------------------
 make_membership_vector() ->
+    {A1, A2, A3} = now(),
+    random:seed(A1, A2, A3),
+
     N = random:uniform(256) - 1,
     case N rem 2 of
         1 ->
@@ -1090,7 +1101,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     MembershipVector}},
             Level}),
 
-    io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
+    %io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
 
     case Result of
         % 既に存在していた場合，そのピアにValueが上書きされる
@@ -1170,7 +1181,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                     MembershipVector}},
             Level}),
 
-    io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
+    %io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
 
     case Result of
         {exist, {Node, Key}} ->
