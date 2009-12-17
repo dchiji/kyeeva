@@ -19,6 +19,7 @@ join_test() ->
 join_test(N, N) ->
     ok;
 join_test(N, M) ->
+%    skipgraph:join(N),
     spawn(fun() -> skipgraph:join(N) end),
     timer:sleep(3),
     join_test(N + 1, M).
