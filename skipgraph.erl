@@ -296,26 +296,26 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
     State)
 when Level == 0 andalso SelfKey == NewKey ->
 
-    Self = whereis(?MODULE),
+%    Self = whereis(?MODULE),
 
-    case ets:lookup('Incomplete', SelfKey) of
-        [{SelfKey, -1}] when From /= Self ->
-            io:format("~n~nrecall~n~n"),
-
-            timer:sleep(1),
-            spawn(fun() ->
-                        gen_server:call(?MODULE,
-                            {SelfKey,
-                                {'join-process-0',
-                                    {From,
-                                        Server,
-                                        NewKey,
-                                        MembershipVector}},
-                                Level})
-                end);
-        _ ->
-            gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}})
-    end,
+%    case ets:lookup('Incomplete', SelfKey) of
+%        [{SelfKey, -1}] when From /= Self ->
+%            io:format("~n~nrecall~n~n"),
+%
+%            timer:sleep(1),
+%            spawn(fun() ->
+%                        gen_server:call(?MODULE,
+%                            {SelfKey,
+%                                {'join-process-0',
+%                                    {From,
+%                                        Server,
+%                                        NewKey,
+%                                        MembershipVector}},
+%                                Level})
+%                end);
+%        _ ->
+            gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
+%    end,
 
     {noreply, State};
 
@@ -531,27 +531,27 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, Membershi
     State)
 when Level == 0 andalso SelfKey == NewKey ->
 
-    Self = whereis(?MODULE),
-
-    case ets:lookup('Incomplete', SelfKey) of
-        [{SelfKey, -1}] when From /= Self ->
-            io:format("~n~nrecall~n~n"),
-
-            timer:sleep(1),
-            spawn(fun() ->
-                        gen_server:call(?MODULE,
-                            {SelfKey,
-                                {'join-process-0-oneway',
-                                    {From,
-                                        Server,
-                                        NewKey,
-                                        MembershipVector}},
-                                Level})
-                end);
-
-        _ ->
-            gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}})
-    end,
+%    Self = whereis(?MODULE),
+%
+%    case ets:lookup('Incomplete', SelfKey) of
+%        [{SelfKey, -1}] when From /= Self ->
+%            io:format("~n~nrecall~n~n"),
+%
+%            timer:sleep(1),
+%            spawn(fun() ->
+%                        gen_server:call(?MODULE,
+%                            {SelfKey,
+%                                {'join-process-0-oneway',
+%                                    {From,
+%                                        Server,
+%                                        NewKey,
+%                                        MembershipVector}},
+%                                Level})
+%                end);
+%
+%        _ ->
+            gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
+%    end,
 
     {noreply, State};
 
