@@ -670,10 +670,14 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, Membershi
                 _ ->
                     Peer = case ets:lookup('Incomplete', SelfKey) of
                         [{SelfKey, MaxLevel}] when MaxLevel + 1 == Level ->
+                            % MaxLevel + 1 == Levelより，lists:nth(MaxLevel + 1, Neighbor) == lists:nth(Level, Neigbor)
+                            % なのであまり意味は無い
                             lists:nth(MaxLevel + 1, Neighbor);
+
                         [{SelfKey, MaxLevel}] when MaxLevel < Level ->
                             % バグが無ければ，このパターンになることはない
                             error;
+
                         _ ->
                             lists:nth(Level, Neighbor)
                     end,
@@ -771,6 +775,7 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
 %%--------------------------------------------------------------------
 join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
+    io:format("join_process_1: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
@@ -818,6 +823,7 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
                     case lists:nth(Level + 1, Neighbor) of
                         {'__none__', '__none__'} ->
+                            io:format("update0, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, {'__none__', '__none__'}, NewKey]),
                             update(SelfKey, {Server, NewKey}, Level),
                             gen_server:reply(From, Reply);
 
@@ -826,9 +832,9 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                             case OtherNode of
                                 % 自分自身の場合，直接update関数を呼び出す
                                 Self ->
-                                    io:format("OtherKey=~p NewKey=~p~n", [OtherKey, NewKey]),
-                                    update(OtherKey, {Server, NewKey}, Level),
+                                    io:format("update1, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, OtherKey, NewKey]),
                                     update(SelfKey, {Server, NewKey}, Level),
+                                    update(OtherKey, {Server, NewKey}, Level),
                                     if
                                         NewKey < SelfKey ->
                                             gen_server:reply(From, {ok, {Self, OtherKey}, {Self, SelfKey}});
@@ -856,7 +862,8 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                 NewKey < SelfKey ->
                     case Level of
                         0 ->
-                            lists:nth(Level + 1, Bigger);
+                            % Levelが0の時は必ずMembershipVectorが一致するはずなのでありえない
+                            error;
                         _ ->
                             lists:nth(Level, Bigger)
                     end;
@@ -864,7 +871,8 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                 SelfKey < NewKey ->
                     case Level of
                         0 ->
-                            lists:nth(Level + 1, Smaller);
+                            % Levelが0の時は必ずMembershipVectorが一致するはずなのでありえない
+                            error;
                         _ ->
                             lists:nth(Level, Smaller)
                     end
@@ -899,6 +907,7 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 %%--------------------------------------------------------------------
 join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
+    io:format("join_process_1_oneway: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
@@ -1038,18 +1047,19 @@ lock_update(Key, Func) ->
     lock_update('Peer', Key, Func).
 
 lock_update(Table, Key, Func) ->
+    Ref = make_ref(),
     case ets:lookup('Lock-Update-Daemon', Key) of
         [] ->
             ets:insert('Lock-Update-Daemon', {Key, spawn(fun lock_update_daemon/0)}),
             [{Key, Daemon}] = ets:lookup('Lock-Update-Daemon', Key),
-            Daemon ! {update, Table, {Key, Func}};
+            Daemon ! {{self(), Ref}, {update, Table, {Key, Func}}};
 
         [{Key, Daemon}] ->
-            Ref = make_ref(),
-            Daemon ! {{self(), Ref}, {update, Table, {Key, Func}}},
-            receive
-                {Ref, ok} -> ok
-            end
+            Daemon ! {{self(), Ref}, {update, Table, {Key, Func}}}
+    end,
+
+    receive
+        {Ref, ok} -> ok
     end.
 
 
