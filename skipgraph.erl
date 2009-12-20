@@ -1308,8 +1308,7 @@ join(Key, Value) ->
                     {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
             end,
 
-            lock_update(Key, F),
-            ok;
+            lock_update(Key, F);
 
         [] ->
             MembershipVector = make_membership_vector(),
@@ -1319,21 +1318,24 @@ join(Key, Value) ->
             case gen_server:call(whereis(?MODULE), {join, Key}) of
                 {ok, {'__none__', '__none__'}} ->
                     ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
-                    ets:insert('Lock-Update-Daemon', {Key, spawn(fun lock_update_daemon/0)}),
-                    ok;
+                    ets:insert('Lock-Update-Daemon', {Key, spawn(fun lock_update_daemon/0)});
 
                 {ok, InitPeer} ->
                     ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
                     ets:insert('Lock-Update-Daemon', {Key, spawn(fun lock_update_daemon/0)}),
                     ets:insert('Incomplete', {Key, -1}),
+
                     join(InitPeer, Key, Value, MembershipVector)
             end
-    end.
+    end,
+    ok.
 
 join(InitPeer, Key, Value, MembershipVector) ->
     join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}).
 
-join(_, _, _, _, ?LEVEL_MAX, _) ->
+join(_, Key, _, _, ?LEVEL_MAX, _) ->
+    ets:delete('Incomplete', Key),
+    io:format("delete Incomplete Key=~p~n", [Key]),
     ok;
 join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
     Result = gen_server:call(InitNode,
@@ -1346,8 +1348,6 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
             Level},
         ?TIMEOUT),
 
-    %io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
-
     case Result of
         % 既に存在していた場合，そのピアにValueが上書きされる
         {exist, {Node, Key}} ->
@@ -1358,6 +1358,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     case ets:lookup('Incomplete', Key) of
                         [{Key, -1}] ->
                             ets:delete('Incomplete', Key),
+                            io:format("delete Incomplete Key=~p~n", [NewKey]),
                             gen_server:call(Node, {Key, {put, Value}});
                         [{Key, _}] ->
                             gen_server:call(Node, {Key, {put, Value}})
@@ -1365,12 +1366,14 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                 _ ->
                     ets:delete('Peer', Key),
                     ets:delete('Incomplete', Key),
+                    io:format("delete Incomplete Key=~p~n", [NewKey]),
                     gen_server:call(Node, {Key, {put, Value}})
             end,
             ok;
 
         {ok, {'__none__', '__none__'}, {'__none__', '__none__'}} ->
             ets:delete('Incomplete', NewKey),
+            io:format("delete Incomplete Key=~p~n", [NewKey]),
             ok;
 
         {ok, {'__none__', '__none__'}, BiggerPeer} ->
@@ -1380,6 +1383,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
             join_oneway(BiggerPeer, NewKey, Value, MembershipVector, Level + 1);
 
@@ -1390,6 +1394,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
             join_oneway(SmallerPeer, NewKey, Value, MembershipVector, Level + 1);
 
@@ -1401,6 +1406,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
             join(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, BiggerPeer);
 
@@ -1427,7 +1433,9 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
 %%                  new peer through only an another
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
-join_oneway(_, _, _, _, ?LEVEL_MAX) ->
+join_oneway(_, Key, _, _, ?LEVEL_MAX) ->
+    ets:delete('Incomplete', Key),
+            io:format("delete Incomplete Key=~p~n", [Key]),
     ok;
 join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
     Result = gen_server:call(InitNode,
@@ -1450,6 +1458,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                     case ets:lookup('Incomplete', Key) of
                         [{Key, -1}] ->
                             ets:delete('Incomplete', Key),
+            io:format("delete Incomplete Key=~p~n", [NewKey]),
                             gen_server:call(Node, {Key, {put, Value}});
                         [{Key, _}] ->
                             gen_server:call(Node, {Key, {put, Value}})
@@ -1457,12 +1466,14 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                 _ ->
                     ets:delete('Peer', Key),
                     ets:delete('Incomplete', Key),
+            io:format("delete Incomplete Key=~p~n", [NewKey]),
                     gen_server:call(Node, {Key, {put, Value}})
             end,
             ok;
 
         {ok, {'__none__', '__none__'}} ->
             ets:delete('Incomplete', NewKey),
+            io:format("delete Incomplete Key=~p~n", [NewKey]),
             ok;
 
         {ok, Peer} ->
@@ -1472,6 +1483,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
             join_oneway(Peer, NewKey, Value, MembershipVector, Level + 1);
 

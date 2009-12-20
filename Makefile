@@ -15,7 +15,7 @@ all: compile
 compile: ${MODS:%=%.beam}
 
 test: compile
-	${ERL} -s test test
+	${ERL} +P 400000 -s test test
 
 clean:
 	rm -rf *.beam erl_crash.dump
