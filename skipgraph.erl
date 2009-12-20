@@ -24,6 +24,14 @@
 %%    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+%%    TODO
+%%
+%%      * 単純なget処理はetsを利用する
+%%      * {join, NewKey}で，適当なピアの選択時にNewKeyを有効活用する
+%%      * 現在はjoin時に全体をロックするが，キー毎にロックするよう変更する
+%%      * join中にサーバが再起動した場合の処理
+%%      * get時に死んだノードを発見した場合の処理
+
 -module(skipgraph).
 -behaviour(gen_server).
 -export([start/1, init/1, handle_call/3, terminate/2,
@@ -37,6 +45,9 @@
 -define(LEVEL_MAX, 32).
 %-define(LEVEL_MAX, 64).
 %-define(LEVEL_MAX, 128).
+
+%-define(TIMEOUT, 3000).
+-define(TIMEOUT, infinity).
 
 
 %%--------------------------------------------------------------------
@@ -240,7 +251,7 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}}, _From, S
 %% Description(en): 
 %% Returns:
 %%--------------------------------------------------------------------
-handle_call({join, NewKey}, From, [InitialNode | Tail]) ->
+handle_call({join, _NewKey}, From, [InitialNode | Tail]) ->
     PeerList = ets:tab2list('Peer'),
 
     case PeerList of
@@ -291,31 +302,31 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Le
 %% Description(en): 
 %% Returns:
 %%--------------------------------------------------------------------
-handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector}}, Level},
+handle_call({SelfKey, {'join-process-0', {From, _Server, NewKey, _MembershipVector}}, Level},
     _From,
     State)
 when Level == 0 andalso SelfKey == NewKey ->
 
-%    Self = whereis(?MODULE),
+    %Self = whereis(?MODULE),
 
-%    case ets:lookup('Incomplete', SelfKey) of
-%        [{SelfKey, -1}] when From /= Self ->
-%            io:format("~n~nrecall~n~n"),
-%
-%            timer:sleep(1),
-%            spawn(fun() ->
-%                        gen_server:call(?MODULE,
-%                            {SelfKey,
-%                                {'join-process-0',
-%                                    {From,
-%                                        Server,
-%                                        NewKey,
-%                                        MembershipVector}},
-%                                Level})
-%                end);
-%        _ ->
-            gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
-%    end,
+    %case ets:lookup('Incomplete', SelfKey) of
+    %    [{SelfKey, -1}] when From /= Self ->
+    %        io:format("~n~nrecall~n~n"),
+    %
+    %        timer:sleep(1),
+    %        spawn(fun() ->
+    %                    gen_server:call(?MODULE,
+    %                        {SelfKey,
+    %                            {'join-process-0',
+    %                                {From,
+    %                                    Server,
+    %                                    NewKey,
+    %                                    MembershipVector}},
+    %                            Level})
+    %            end);
+    %    _ ->
+    gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
+    %end,
 
     {noreply, State};
 
@@ -454,7 +465,7 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
 
                         _ ->
                             % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
-                            {BestNode, BestKey} = case ets:lookup('Incomplete', SelfKey) of
+                            BestPeer = case ets:lookup('Incomplete', SelfKey) of
                                 [{SelfKey, MaxLevel_}] when (MaxLevel_ + 1) == Level ->
                                     select_best(lists:nthtail(MaxLevel_, Neighbor), NewKey, S_or_B);
                                 [{SelfKey, MaxLevel_}] when MaxLevel_ < Level ->
@@ -465,16 +476,36 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
                             end,
                             %io:format("BestKey=~p~n", [BestKey]),
 
-                            spawn(fun() ->
-                                        gen_server:call(BestNode,
-                                            {BestKey,
-                                                {'join-process-0',
-                                                    {From,
-                                                        Server,
-                                                        NewKey,
-                                                        MembershipVector}},
-                                                Level})
-                                end)
+                            case BestPeer of
+                                {'__none__', '__none__'} ->
+                                    join_process_1_oneway(SelfKey,
+                                        {From,
+                                            Server,
+                                            NewKey,
+                                            MembershipVector},
+                                        Level);
+                                {'__self__'} ->
+                                    join_process_1_oneway(SelfKey,
+                                        {From,
+                                            Server,
+                                            NewKey,
+                                            MembershipVector},
+                                        Level);
+
+
+                                % 最適なピアの探索を続ける(join-process-0-oneway)
+                                {BestNode, BestKey} ->
+                                    spawn(fun() ->
+                                                gen_server:call(BestNode,
+                                                    {BestKey,
+                                                        {'join-process-0-oneway',
+                                                            {From,
+                                                                Server,
+                                                                NewKey,
+                                                                MembershipVector}},
+                                                        Level})
+                                        end)
+                            end
                     end
             end
     end,
@@ -526,32 +557,32 @@ handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MembershipVecto
 %% Description(en): 
 %% Returns:
 %%--------------------------------------------------------------------
-handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MembershipVector}}, Level},
+handle_call({SelfKey, {'join-process-0-oneway', {From, _Server, NewKey, _MembershipVector}}, Level},
     _From,
     State)
 when Level == 0 andalso SelfKey == NewKey ->
 
-%    Self = whereis(?MODULE),
-%
-%    case ets:lookup('Incomplete', SelfKey) of
-%        [{SelfKey, -1}] when From /= Self ->
-%            io:format("~n~nrecall~n~n"),
-%
-%            timer:sleep(1),
-%            spawn(fun() ->
-%                        gen_server:call(?MODULE,
-%                            {SelfKey,
-%                                {'join-process-0-oneway',
-%                                    {From,
-%                                        Server,
-%                                        NewKey,
-%                                        MembershipVector}},
-%                                Level})
-%                end);
-%
-%        _ ->
-            gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
-%    end,
+    %Self = whereis(?MODULE),
+    %
+    %case ets:lookup('Incomplete', SelfKey) of
+    %    [{SelfKey, -1}] when From /= Self ->
+    %        io:format("~n~nrecall~n~n"),
+    %
+    %        timer:sleep(1),
+    %        spawn(fun() ->
+    %                    gen_server:call(?MODULE,
+    %                        {SelfKey,
+    %                            {'join-process-0-oneway',
+    %                                {From,
+    %                                    Server,
+    %                                    NewKey,
+    %                                    MembershipVector}},
+    %                            Level})
+    %            end);
+    %
+    %    _ ->
+    gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}}),
+    %end,
 
     {noreply, State};
 
@@ -696,7 +727,7 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, Membershi
                             % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
                             %io:format("~nSelfKey=~p, NewKey=~p~nLevel=~p, S_or_B=~p~nNeighbor=~p~n", [SelfKey, NewKey, Level, S_or_B, Neighbor]),
                             %io:format("Peer(NewKey)=~p~n", [ets:lookup('Peer', NewKey)]),
-                            {BestNode, BestKey} = case ets:lookup('Incomplete', SelfKey) of
+                            BestPeer = case ets:lookup('Incomplete', SelfKey) of
                                 [{SelfKey, MaxLevel_}] when (MaxLevel_ + 1) == Level ->
                                     select_best(lists:nthtail(MaxLevel_, Neighbor), NewKey, S_or_B);
                                 [{SelfKey, MaxLevel_}] when MaxLevel_ < Level ->
@@ -706,16 +737,36 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, Membershi
                                     select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B)
                             end,
 
-                            spawn(fun() ->
-                                        gen_server:call(BestNode,
-                                            {BestKey,
-                                                {'join-process-0-oneway',
-                                                    {From,
-                                                        Server,
-                                                        NewKey,
-                                                        MembershipVector}},
-                                                Level})
-                                end)
+                            case BestPeer of
+                                {'__none__', '__none__'} ->
+                                    join_process_1_oneway(SelfKey,
+                                        {From,
+                                            Server,
+                                            NewKey,
+                                            MembershipVector},
+                                        Level);
+                                {'__self__'} ->
+                                    join_process_1_oneway(SelfKey,
+                                        {From,
+                                            Server,
+                                            NewKey,
+                                            MembershipVector},
+                                        Level);
+
+
+                                % 最適なピアの探索を続ける(join-process-0-oneway)
+                                {BestNode, BestKey} ->
+                                    spawn(fun() ->
+                                                gen_server:call(BestNode,
+                                                    {BestKey,
+                                                        {'join-process-0-oneway',
+                                                            {From,
+                                                                Server,
+                                                                NewKey,
+                                                                MembershipVector}},
+                                                        Level})
+                                        end)
+                            end
                     end
             end
     end,
@@ -800,16 +851,16 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                             gen_server:reply(From, {error, mismatch});
 
                         %{OtherNode, OtherKey} ->
-                            %spawn(fun() ->
-                            %            gen_server:call(OtherNode,
-                            %                {OtherKey,
-                            %                    {'join-process-1',
-                            %                        {From,
-                            %                            Server,
-                            %                            NewKey,
-                            %                            MembershipVector}},
-                            %                    Level})
-                            %    end)
+                        %    spawn(fun() ->
+                        %            gen_server:call(OtherNode,
+                        %                {OtherKey,
+                        %                    {'join-process-1',
+                        %                        {From,
+                        %                            Server,
+                        %                            NewKey,
+                        %                            MembershipVector}},
+                        %                Level})
+                        %    end)
                         _ ->
                             spawn(fun() ->
                                         io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
@@ -943,16 +994,16 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
                             gen_server:reply(From, {error, mismatch});
 
                         %{OtherNode, OtherKey} ->
-                            %spawn(fun() ->
-                            %            gen_server:call(OtherNode,
-                            %                {OtherKey,
-                            %                    {'join-process-1-oneway',
-                            %                        {From,
-                            %                            Server,
-                            %                            NewKey,
-                            %                            MembershipVector}},
-                            %                    Level})
-                            %    end)
+                        %    spawn(fun() ->
+                        %            gen_server:call(OtherNode,
+                        %                {OtherKey,
+                        %                    {'join-process-1-oneway',
+                        %                        {From,
+                        %                            Server,
+                        %                            NewKey,
+                        %                            MembershipVector}},
+                        %                    Level})
+                        %    end)
                         _ ->
                             spawn(fun() ->
                                         io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
@@ -1291,7 +1342,9 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                 {whereis(?MODULE),
                     NewKey,
                     MembershipVector}},
-            Level}),
+            %Level}),
+            Level},
+        ?TIMEOUT),
 
     %io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
 
@@ -1383,7 +1436,8 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                 {whereis(?MODULE),
                     NewKey,
                     MembershipVector}},
-            Level}),
+            Level},
+        ?TIMEOUT),
 
     %io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
 

@@ -11,8 +11,8 @@ test() ->
     %            {join_test, join_test()},
     %            {get_test, get_test()},
     %            {put_test, put_test()}}]),
-    timer:sleep(40),
-    skipgraph:test().
+    timer:sleep(infinity).
+%    skipgraph:test().
 
 join_test() ->
     join_test(1, 1000).
@@ -20,9 +20,9 @@ join_test() ->
 join_test(N, N) ->
     ok;
 join_test(N, M) ->
-%    skipgraph:join(N),
+%   skipgraph:join(N),
     spawn(fun() -> skipgraph:join(N) end),
-    timer:sleep(3),
+    timer:sleep(10),
     join_test(N + 1, M).
 
 
