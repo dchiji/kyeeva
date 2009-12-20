@@ -327,10 +327,10 @@ when Level > 0 andalso SelfKey == NewKey ->
 
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, -1}] ->
-            io:format("~n~nrecall~n~n"),
+            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
-            timer:sleep(1),
             spawn(fun() ->
+                        timer:sleep(2),
                         gen_server:call(?MODULE,
                             {SelfKey,
                                 {'join-process-0',
@@ -371,10 +371,10 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
 
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, -1}] ->
-            io:format("~n~nrecall~n~n"),
+            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
-            timer:sleep(1),
             spawn(fun() ->
+                        timer:sleep(2),
                         gen_server:call(?MODULE,
                             {SelfKey,
                                 {'join-process-0',
@@ -563,10 +563,10 @@ when Level > 0 andalso SelfKey == NewKey ->
 
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, -1}] ->
-            io:format("~n~nrecall~n~n"),
+            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
-            timer:sleep(1),
             spawn(fun() ->
+                        timer:sleep(2),
                         gen_server:call(?MODULE,
                             {SelfKey,
                                 {'join-process-0-oneway',
@@ -607,10 +607,10 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, Membershi
 
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, -1}] ->
-            io:format("~n~nrecall~n~n"),
+            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
-            timer:sleep(1),
             spawn(fun() ->
+                        timer:sleep(2),
                         gen_server:call(?MODULE,
                             {SelfKey,
                                 {'join-process-0-oneway',
@@ -799,11 +799,24 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                         {'__none__', '__none__'} ->
                             gen_server:reply(From, {error, mismatch});
 
-                        {OtherNode, OtherKey} ->
+                        %{OtherNode, OtherKey} ->
+                            %spawn(fun() ->
+                            %            gen_server:call(OtherNode,
+                            %                {OtherKey,
+                            %                    {'join-process-1',
+                            %                        {From,
+                            %                            Server,
+                            %                            NewKey,
+                            %                            MembershipVector}},
+                            %                    Level})
+                            %    end)
+                        _ ->
                             spawn(fun() ->
-                                        gen_server:call(OtherNode,
-                                            {OtherKey,
-                                                {'join-process-1',
+                                        io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
+                                        timer:sleep(2),
+                                        gen_server:call(?MODULE,
+                                            {SelfKey,
+                                                {'join-process-0',
                                                     {From,
                                                         Server,
                                                         NewKey,
@@ -929,11 +942,24 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
                         {'__none__', '__none__'} ->
                             gen_server:reply(From, {error, mismatch});
 
-                        {OtherNode, OtherKey} ->
+                        %{OtherNode, OtherKey} ->
+                            %spawn(fun() ->
+                            %            gen_server:call(OtherNode,
+                            %                {OtherKey,
+                            %                    {'join-process-1-oneway',
+                            %                        {From,
+                            %                            Server,
+                            %                            NewKey,
+                            %                            MembershipVector}},
+                            %                    Level})
+                            %    end)
+                        _ ->
                             spawn(fun() ->
-                                        gen_server:call(OtherNode,
-                                            {OtherKey,
-                                                {'join-process-1-oneway',
+                                        io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
+                                        timer:sleep(2),
+                                        gen_server:call(?MODULE,
+                                            {SelfKey,
+                                                {'join-process-0-oneway',
                                                     {From,
                                                         Server,
                                                         NewKey,

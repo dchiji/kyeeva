@@ -6,10 +6,11 @@
 test() ->
     {ok, Server} = skipgraph:start('__none__'),
     skipgraph:join(0),
-    io:format("~nResult: ~p~n", [{
-                {join_test, join_test()},
-                {get_test, get_test()},
-                {put_test, put_test()}}]),
+    io:format("~nResult: ~p~n", [join_test()]),
+    %io:format("~nResult: ~p~n", [{
+    %            {join_test, join_test()},
+    %            {get_test, get_test()},
+    %            {put_test, put_test()}}]),
     timer:sleep(40),
     skipgraph:test().
 
