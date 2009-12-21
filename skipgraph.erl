@@ -34,11 +34,12 @@
 
 -module(skipgraph).
 -behaviour(gen_server).
+
 -export([start/1, init/1, handle_call/3, terminate/2,
         handle_cast/2, handle_info/2, code_change/3,
-        join/1, join/2, test/0, get/1, get/2, put/2,
-        get_server/0]).
--export([make_membership_vector/0]).
+        join/1, join/2, test/0, get/1, get/2, put/2]).
+
+-export([get_server/0, get_peer/0]).
 
 %-define(LEVEL_MAX, 8).
 %-define(LEVEL_MAX, 16).
@@ -62,9 +63,12 @@ start(Initial) ->
     %   Neighbor : {Smaller, Bigger}
     %     Smaller : [{Node, Key}, ...]
     %     Smaller : [{Node, Key}, ...]
-    ets:new('Peer', [ordered_set, public, named_table]),
+    T = ets:new('Peer', [ordered_set, public, named_table]),
     ets:new('Lock-Update-Daemon', [set, public, named_table]),
     ets:new('Incomplete', [set, public, named_table]),
+    ets:new('ETS-Table', [set, public, named_table]),
+
+    ets:insert('ETS-Table', {?MODULE, T}),
 
     case Initial of
         '__none__' ->
@@ -103,6 +107,18 @@ init(Arg) ->
 handle_call({peer, random}, _From, State) ->
     [{SelfKey, {_, _, _}} | _] = ets:tab2list('Peer'),
     {reply, {whereis(?MODULE), SelfKey}, State};
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_call <get-ets-table>
+%% Description(ja): ネットワーク先のノードから呼び出される．自ノードの
+%%                  Peerを保持しているETSを呼び出し元に返す
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({'get-ets-table'}, _From, State) ->
+    [{?MODULE, Tab}] = ets:lookup('ETS-Table', ?MODULE),
+    {reply, Tab, State};
 
 
 %%--------------------------------------------------------------------
@@ -187,17 +203,38 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}}, _From, State) ->
                                 {Key0, Key1, From},
                                 []}});
 
+                % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
+                {BestNode, Key0} when Key0 == Key1 ->
+                    case ets:lookup('ETS-Table', BestNode) of
+                        [{BestNode, Tab}] ->
+                            [{BestNode, Tab} | _] = ets:lookup('ETS-Table', BestNode),
+                            [{Key0, {Value, _, _}} | _] = ets:lookup(Tab, Key0),
+
+                            io:format("ets~n"),
+                            gen_server:reply(From, {ok, [{Key0, Value}]});
+
+                        _ ->
+                            spawn(fun() ->
+                                        gen_server:call(BestNode,
+                                            {Key0,
+                                                {'get-process-0',
+                                                    {Key0, Key1, From}}})
+                                end)
+                    end;
+
                 % 最適なピアの探索を続ける(get-process-0)
                 {BestNode, BestKey} ->
-                    gen_server:call(BestNode,
-                        {BestKey,
-                            {'get-process-0',
-                                {Key0, Key1, From}}})
+                    spawn(fun() ->
+                                gen_server:call(BestNode,
+                                    {BestKey,
+                                        {'get-process-0',
+                                            {Key0, Key1, From}}})
+                        end)
             end
     end,
 
     spawn(F),
-    {noreply, State};
+    {reply, '__none__', State};
 
 
 %%--------------------------------------------------------------------
@@ -862,18 +899,8 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                         %                Level})
                         %    end)
                         _ ->
-                            spawn(fun() ->
-                                        io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
-                                        timer:sleep(2),
-                                        gen_server:call(?MODULE,
-                                            {SelfKey,
-                                                {'join-process-0',
-                                                    {From,
-                                                        Server,
-                                                        NewKey,
-                                                        MembershipVector}},
-                                                Level})
-                                end)
+                            io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
+                            gen_server:reply(From, {error, retry})
                     end;
 
                 % update処理を行い，反対側のピアにもメッセージを送信する
@@ -889,7 +916,17 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                         {'__none__', '__none__'} ->
                             io:format("update0, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, {'__none__', '__none__'}, NewKey]),
                             update(SelfKey, {Server, NewKey}, Level),
-                            gen_server:reply(From, Reply);
+                            gen_server:reply(From, Reply),
+
+                            case ets:lookup('ETS-Table', Server) of
+                                [] ->
+                                    spawn(fun() ->
+                                                Tab = gen_server:call(Server, {'get-ets-table'}),
+                                                ets:insert('ETS-Table', {Server, Tab})
+                                        end);
+                                _ ->
+                                    ok
+                            end;
 
                         {OtherNode, OtherKey} ->
                             Self = whereis(?MODULE),
@@ -904,6 +941,16 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                             gen_server:reply(From, {ok, {Self, OtherKey}, {Self, SelfKey}});
                                         SelfKey < NewKey ->
                                             gen_server:reply(From, {ok, {Self, SelfKey}, {Self, OtherKey}})
+                                    end,
+
+                                    case ets:lookup('ETS-Table', Server) of
+                                        [] ->
+                                            spawn(fun() ->
+                                                        Tab = gen_server:call(Server, {'get-ets-table'}),
+                                                        ets:insert('ETS-Table', {Server, Tab})
+                                                end);
+                                        _ ->
+                                            ok
                                     end;
 
                                 _ ->
@@ -1005,24 +1052,24 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
                         %                    Level})
                         %    end)
                         _ ->
-                            spawn(fun() ->
-                                        io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
-                                        timer:sleep(2),
-                                        gen_server:call(?MODULE,
-                                            {SelfKey,
-                                                {'join-process-0-oneway',
-                                                    {From,
-                                                        Server,
-                                                        NewKey,
-                                                        MembershipVector}},
-                                                Level})
-                                end)
+                            io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
+                            gen_server:reply(From, {error, retry})
                     end;
 
                 _ ->
                     update(SelfKey, {Server, NewKey}, Level),
                     gen_server:reply(From,
-                        {ok, {whereis(?MODULE), SelfKey}})
+                        {ok, {whereis(?MODULE), SelfKey}}),
+
+                    case ets:lookup('ETS-Table', Server) of
+                        [] ->
+                            spawn(fun() ->
+                                        Tab = gen_server:call(Server, {'get-ets-table'}),
+                                        ets:insert('ETS-Table', {Server, Tab})
+                                end);
+                        _ ->
+                            ok
+                    end
             end;
 
         _ ->
@@ -1331,13 +1378,15 @@ join(Key, Value) ->
     ok.
 
 join(InitPeer, Key, Value, MembershipVector) ->
-    join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}).
+    join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}, 0).
 
-join(_, Key, _, _, ?LEVEL_MAX, _) ->
+join(_, Key, _, _, _, _, 100) ->
     ets:delete('Incomplete', Key),
-    io:format("delete Incomplete Key=~p~n", [Key]),
     ok;
-join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
+join(_, Key, _, _, ?LEVEL_MAX, _, _) ->
+    ets:delete('Incomplete', Key),
+    ok;
+join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN) ->
     Result = gen_server:call(InitNode,
         {InitKey,
             {'join-process-0',
@@ -1358,7 +1407,6 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     case ets:lookup('Incomplete', Key) of
                         [{Key, -1}] ->
                             ets:delete('Incomplete', Key),
-                            io:format("delete Incomplete Key=~p~n", [NewKey]),
                             gen_server:call(Node, {Key, {put, Value}});
                         [{Key, _}] ->
                             gen_server:call(Node, {Key, {put, Value}})
@@ -1366,14 +1414,12 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                 _ ->
                     ets:delete('Peer', Key),
                     ets:delete('Incomplete', Key),
-                    io:format("delete Incomplete Key=~p~n", [NewKey]),
                     gen_server:call(Node, {Key, {put, Value}})
             end,
             ok;
 
         {ok, {'__none__', '__none__'}, {'__none__', '__none__'}} ->
             ets:delete('Incomplete', NewKey),
-            io:format("delete Incomplete Key=~p~n", [NewKey]),
             ok;
 
         {ok, {'__none__', '__none__'}, BiggerPeer} ->
@@ -1383,9 +1429,8 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
-            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
-            join_oneway(BiggerPeer, NewKey, Value, MembershipVector, Level + 1);
+            join_oneway(BiggerPeer, NewKey, Value, MembershipVector, Level + 1, 0);
 
         {ok, SmallerPeer, {'__none__', '__none__'}} ->
             update(NewKey, SmallerPeer, Level),
@@ -1394,9 +1439,8 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
-            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
-            join_oneway(SmallerPeer, NewKey, Value, MembershipVector, Level + 1);
+            join_oneway(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, 0);
 
         {ok, SmallerPeer, BiggerPeer} ->
             update(NewKey, SmallerPeer, Level),
@@ -1406,9 +1450,12 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
-            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
-            join(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, BiggerPeer);
+            join(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, BiggerPeer, 0);
+
+        {error, retry} ->
+            timer:sleep(3000),
+            join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN + 1);
 
         {error, mismatch} ->
             case OtherPeer of
@@ -1416,7 +1463,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
                     ets:delete('Incomplete', NewKey),
                     ok;
                 _ ->
-                    join_oneway(OtherPeer, NewKey, Value, MembershipVector, Level)
+                    join_oneway(OtherPeer, NewKey, Value, MembershipVector, Level, 0)
             end;
 
         Message ->
@@ -1433,11 +1480,13 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
 %%                  new peer through only an another
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
-join_oneway(_, Key, _, _, ?LEVEL_MAX) ->
+join_oneway(_, Key, _, _, _, 10) ->
     ets:delete('Incomplete', Key),
-            io:format("delete Incomplete Key=~p~n", [Key]),
     ok;
-join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
+join_oneway(_, Key, _, _, ?LEVEL_MAX, _) ->
+    ets:delete('Incomplete', Key),
+    ok;
+join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN) ->
     Result = gen_server:call(InitNode,
         {InitKey,
             {'join-process-0-oneway',
@@ -1458,7 +1507,6 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                     case ets:lookup('Incomplete', Key) of
                         [{Key, -1}] ->
                             ets:delete('Incomplete', Key),
-            io:format("delete Incomplete Key=~p~n", [NewKey]),
                             gen_server:call(Node, {Key, {put, Value}});
                         [{Key, _}] ->
                             gen_server:call(Node, {Key, {put, Value}})
@@ -1466,14 +1514,12 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                 _ ->
                     ets:delete('Peer', Key),
                     ets:delete('Incomplete', Key),
-            io:format("delete Incomplete Key=~p~n", [NewKey]),
                     gen_server:call(Node, {Key, {put, Value}})
             end,
             ok;
 
         {ok, {'__none__', '__none__'}} ->
             ets:delete('Incomplete', NewKey),
-            io:format("delete Incomplete Key=~p~n", [NewKey]),
             ok;
 
         {ok, Peer} ->
@@ -1483,9 +1529,12 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
-            io:format("update Incomplete=>~p, Key=~p~n", [Level, NewKey]),
 
-            join_oneway(Peer, NewKey, Value, MembershipVector, Level + 1);
+            join_oneway(Peer, NewKey, Value, MembershipVector, Level + 1, 0);
+
+        {error, retry} ->
+            timer:sleep(3000),
+            join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN + 1);
 
         {error, mismatch} ->
             ets:delete('Incomplete', NewKey),
@@ -1533,11 +1582,21 @@ test() ->
 
 
 %%--------------------------------------------------------------------
-%% Function: get
+%% Function: get_server
 %% Description(ja): サーバのpidを返す
 %% Description(en): return pid of server
 %% Returns: pid()
 %%--------------------------------------------------------------------
 get_server() ->
     whereis(?MODULE).
+
+
+%%--------------------------------------------------------------------
+%% Function: get_peer
+%% Description(ja): すべてのピアを返す
+%% Description(en): return pid of server
+%% Returns: pid()
+%%--------------------------------------------------------------------
+get_peer() ->
+    ets:tab2list('Peer').
 
