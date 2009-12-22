@@ -65,6 +65,7 @@ start(Initial) ->
     %     Smaller : [{Node, Key}, ...]
     T = ets:new('Peer', [ordered_set, public, named_table]),
     ets:new('Lock-Update-Daemon', [set, public, named_table]),
+    ets:new('Joining-Wait', [set, public, named_table]),
     ets:new('Incomplete', [set, public, named_table]),
     ets:new('ETS-Table', [set, public, named_table]),
 
@@ -515,14 +516,14 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
 
                             case BestPeer of
                                 {'__none__', '__none__'} ->
-                                    join_process_1_oneway(SelfKey,
+                                    join_process_1(SelfKey,
                                         {From,
                                             Server,
                                             NewKey,
                                             MembershipVector},
                                         Level);
                                 {'__self__'} ->
-                                    join_process_1_oneway(SelfKey,
+                                    join_process_1(SelfKey,
                                         {From,
                                             Server,
                                             NewKey,
@@ -530,12 +531,12 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
                                         Level);
 
 
-                                % 最適なピアの探索を続ける(join-process-0-oneway)
+                                % 最適なピアの探索を続ける(join-process-0)
                                 {BestNode, BestKey} ->
                                     spawn(fun() ->
                                                 gen_server:call(BestNode,
                                                     {BestKey,
-                                                        {'join-process-0-oneway',
+                                                        {'join-process-0',
                                                             {From,
                                                                 Server,
                                                                 NewKey,
@@ -836,18 +837,39 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     _From,
     State) ->
 
+    Ref = make_ref(),
     update(SelfKey, {Server, NewKey}, Level),
+
     if
         NewKey < SelfKey ->
             gen_server:reply(From,
                 {ok,
-                    Other,
-                    {whereis(?MODULE), SelfKey}});
+                    {Other,
+                        {whereis(?MODULE), SelfKey}},
+                    {self(), Ref}});
+
         SelfKey < NewKey ->
             gen_server:reply(From,
                 {ok,
-                    {whereis(?MODULE), SelfKey},
-                    Other})
+                    {{whereis(?MODULE), SelfKey},
+                        Other},
+                    {self(), Ref}})
+    end,
+
+    % reply先がNeighborの更新に成功するまで待機
+    receive
+        {ok, Ref} ->
+            ok
+    end,
+
+    case ets:lookup('ETS-Table', Server) of
+        [] ->
+            spawn(fun() ->
+                        Tab = gen_server:call(Server, {'get-ets-table'}),
+                        ets:insert('ETS-Table', {Server, Tab})
+                end);
+        _ ->
+            ok
     end,
 
     {reply, '__none__', State}.
@@ -900,16 +922,35 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                         %    end)
                         _ ->
                             io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
-                            gen_server:reply(From, {error, retry})
+                            [{{SelfKey, MaxLevel}, Daemon}] = ets:lookup('Joining-Wait', {SelfKey, MaxLevel}),
+ 
+                            Ref = make_ref(),
+                            Pid = spawn(fun() ->
+                                        receive
+                                            {ok, Ref} ->
+                                                gen_server:call(?MODULE,
+                                                    {SelfKey,
+                                                        {'join-process-0',
+                                                            {From,
+                                                                Server,
+                                                                NewKey,
+                                                                MembershipVector}},
+                                                        Level})
+                                        end
+                                end),
+
+                            Daemon ! {add, {Pid, Ref}}
                     end;
 
                 % update処理を行い，反対側のピアにもメッセージを送信する
                 _ ->
+                    Ref = make_ref(),
+
                     {Neighbor, Reply} = if
                         NewKey < SelfKey ->
-                            {Smaller, {ok, {'__none__', '__none__'}, {whereis(?MODULE), SelfKey}}};
+                            {Smaller, {ok, {{'__none__', '__none__'}, {whereis(?MODULE), SelfKey}}, {self(), Ref}}};
                         SelfKey < NewKey ->
-                            {Bigger, {ok, {whereis(?MODULE), SelfKey}, {'__none__', '__none__'}}}
+                            {Bigger, {ok, {{whereis(?MODULE), SelfKey}, {'__none__', '__none__'}}, {self(), Ref}}}
                     end,
 
                     case lists:nth(Level + 1, Neighbor) of
@@ -917,6 +958,12 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                             io:format("update0, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, {'__none__', '__none__'}, NewKey]),
                             update(SelfKey, {Server, NewKey}, Level),
                             gen_server:reply(From, Reply),
+
+                            % reply先がNeighborの更新に成功するまで待機
+                            receive
+                                {ok, Ref} ->
+                                    ok
+                            end,
 
                             case ets:lookup('ETS-Table', Server) of
                                 [] ->
@@ -938,9 +985,15 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                     update(OtherKey, {Server, NewKey}, Level),
                                     if
                                         NewKey < SelfKey ->
-                                            gen_server:reply(From, {ok, {Self, OtherKey}, {Self, SelfKey}});
+                                            gen_server:reply(From, {ok, {{Self, OtherKey}, {Self, SelfKey}}, {self(), Ref}});
                                         SelfKey < NewKey ->
-                                            gen_server:reply(From, {ok, {Self, SelfKey}, {Self, OtherKey}})
+                                            gen_server:reply(From, {ok, {{Self, SelfKey}, {Self, OtherKey}}, {self(), Ref}})
+                                    end,
+
+                                    % reply先がNeighborの更新に成功するまで待機
+                                    receive
+                                        {ok, Ref} ->
+                                            ok
                                     end,
 
                                     case ets:lookup('ETS-Table', Server) of
@@ -1053,13 +1106,38 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
                         %    end)
                         _ ->
                             io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
-                            gen_server:reply(From, {error, retry})
-                    end;
+                            [{{SelfKey, MaxLevel}, Daemon}] = ets:lookup('Joining-Wait', {SelfKey, MaxLevel}),
+ 
+                            Ref = make_ref(),
+                            Pid = spawn(fun() ->
+                                        receive
+                                            {ok, Ref} ->
+                                                gen_server:call(?MODULE,
+                                                    {SelfKey,
+                                                        {'join-process-0-oneway',
+                                                            {From,
+                                                                Server,
+                                                                NewKey,
+                                                                MembershipVector}},
+                                                        Level})
+                                        end
+                                end),
+
+                            Daemon ! {add, {Pid, Ref}}
+                end;
 
                 _ ->
+                    Ref = make_ref(),
+
                     update(SelfKey, {Server, NewKey}, Level),
                     gen_server:reply(From,
-                        {ok, {whereis(?MODULE), SelfKey}}),
+                        {ok, {whereis(?MODULE), SelfKey}, {self(), Ref}}),
+
+                    % reply先がNeighborの更新に成功するまで待機
+                    receive
+                        {ok, Ref} ->
+                            ok
+                    end,
 
                     case ets:lookup('ETS-Table', Server) of
                         [] ->
@@ -1159,6 +1237,29 @@ code_change(_OldVsn, State, _NewVsn) ->
 %%====================================================================
 %% Utilities
 %%====================================================================
+
+wait_trap(PList) ->
+    receive
+        {add, {Pid, Ref}} ->
+            wait_trap([{Pid, Ref} | PList]);
+
+        {trap} ->
+            io:format("trap~n"),
+            lists:foreach(fun({Pid, Ref}) ->
+                        Pid ! {ok, Ref}
+                end,
+                PList),
+
+            wait_trapped()
+    end.
+
+wait_trapped() ->
+    receive
+        {add, {Pid, Ref}} ->
+            Pid ! {ok, Ref},
+            wait_trapped()
+    end.
+
 
 %%--------------------------------------------------------------------
 %% Function: lock_update
@@ -1387,6 +1488,10 @@ join(_, Key, _, _, ?LEVEL_MAX, _, _) ->
     ets:delete('Incomplete', Key),
     ok;
 join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN) ->
+    Daemon = spawn(fun() -> wait_trap([]) end),
+    ets:insert('Joining-Wait',
+        {{NewKey, Level}, Daemon}),
+
     Result = gen_server:call(InitNode,
         {InitKey,
             {'join-process-0',
@@ -1418,38 +1523,50 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
             end,
             ok;
 
-        {ok, {'__none__', '__none__'}, {'__none__', '__none__'}} ->
+        {ok, {{'__none__', '__none__'}, {'__none__', '__none__'}}, _} ->
             ets:delete('Incomplete', NewKey),
             ok;
 
-        {ok, {'__none__', '__none__'}, BiggerPeer} ->
+        {ok, {{'__none__', '__none__'}, BiggerPeer}, {Pid, Ref}} ->
+            io:format("~nBiggerPeer=~p~n", [BiggerPeer]),
             update(NewKey, BiggerPeer, Level),
+            Pid ! {ok, Ref},
 
             F = fun({Key, _MaxLevel}) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+
+            Daemon ! {trap},
 
             join_oneway(BiggerPeer, NewKey, Value, MembershipVector, Level + 1, 0);
 
-        {ok, SmallerPeer, {'__none__', '__none__'}} ->
+        {ok, {SmallerPeer, {'__none__', '__none__'}}, {Pid, Ref}} ->
+            io:format("~nSmallerPeer=~p~n", [SmallerPeer]),
             update(NewKey, SmallerPeer, Level),
+            Pid ! {ok, Ref},
 
             F = fun({Key, _MaxLevel}) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+
+            Daemon ! {trap},
 
             join_oneway(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, 0);
 
-        {ok, SmallerPeer, BiggerPeer} ->
+        {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
+            io:format("~nSmallerPeer=~p, BiggerPeer=~p, {~p, ~p}~n", [SmallerPeer, BiggerPeer, Pid, Ref]),
             update(NewKey, SmallerPeer, Level),
             update(NewKey, BiggerPeer, Level),
+            Pid ! {ok, Ref},
 
             F = fun({Key, _MaxLevel}) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+
+            Daemon ! {trap},
 
             join(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, BiggerPeer, 0);
 
@@ -1487,6 +1604,10 @@ join_oneway(_, Key, _, _, ?LEVEL_MAX, _) ->
     ets:delete('Incomplete', Key),
     ok;
 join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN) ->
+    Daemon = spawn(fun() -> wait_trap([]) end),
+    ets:insert('Joining-Wait',
+        {{NewKey, Level}, Daemon}),
+
     Result = gen_server:call(InitNode,
         {InitKey,
             {'join-process-0-oneway',
@@ -1518,17 +1639,20 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
             end,
             ok;
 
-        {ok, {'__none__', '__none__'}} ->
+        {ok, {'__none__', '__none__'}, _} ->
             ets:delete('Incomplete', NewKey),
             ok;
 
-        {ok, Peer} ->
+        {ok, Peer, {Pid, Ref}} ->
             update(NewKey, Peer, Level),
+            Pid ! {ok, Ref},
 
             F = fun({Key, _MaxLevel}) ->
                     {ok, {Key, Level}}
             end,
             lock_update('Incomplete', NewKey, F),
+
+            Daemon ! {trap},
 
             join_oneway(Peer, NewKey, Value, MembershipVector, Level + 1, 0);
 
