@@ -1238,6 +1238,13 @@ code_change(_OldVsn, State, _NewVsn) ->
 %% Utilities
 %%====================================================================
 
+%%--------------------------------------------------------------------
+%% Function: wait_trap
+%% Description(ja): {trap}を受信したら，PListに含まれる全プロセスに{ok, Ref}
+%%                  メッセージを送信する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 wait_trap(PList) ->
     receive
         {add, {Pid, Ref}} ->
@@ -1253,6 +1260,12 @@ wait_trap(PList) ->
             wait_trapped()
     end.
 
+%%--------------------------------------------------------------------
+%% Function: wait_trapped
+%% Description(ja): wait_trapが{trap}を受信した後の処理．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 wait_trapped() ->
     receive
         {add, {Pid, Ref}} ->
