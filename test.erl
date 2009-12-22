@@ -7,23 +7,25 @@ test() ->
     {ok, Server} = skipgraph:start('__none__'),
     skipgraph:join(0),
     join_test(),
+    timer:sleep(50000),
     %io:format("~nResult: ~p~n", [{
     %            {join_test, join_test()},
     %            {get_test, get_test()},
     %            {put_test, put_test()}}]),
+    skipgraph:test(),
     io:format("~nget(36)=~p~nget(50, 282)=~p~n", [skipgraph:get(32), skipgraph:get(50, 282)]),
-    timer:sleep(infinity),
-    skipgraph:test().
+
+    timer:sleep(infinity).
 
 join_test() ->
-    join_test(1, 300).
+    join_test(1, 1000).
 
 join_test(N, N) ->
     ok;
 join_test(N, M) ->
-    skipgraph:join(N),
-    %spawn(fun() -> skipgraph:join(N) end),
-    %timer:sleep(5),
+    %skipgraph:join(N),
+    spawn(fun() -> skipgraph:join(N) end),
+    timer:sleep(5),
     join_test(N + 1, M).
 
 
