@@ -26,9 +26,7 @@
 
 %%    TODO
 %%
-%%      * 単純なget処理はetsを利用する
 %%      * {join, NewKey}で，適当なピアの選択時にNewKeyを有効活用する
-%%      * 現在はjoin時に全体をロックするが，キー毎にロックするよう変更する
 %%      * join中にサーバが再起動した場合の処理
 %%      * get時に死んだノードを発見した場合の処理
 
@@ -529,13 +527,11 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
 %%--------------------------------------------------------------------
 join_process_0(SelfKey, {From, _Server, NewKey, _MembershipVector}, Level)
 when Level == 0 andalso SelfKey == NewKey ->
-
     gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}});
 
 
 join_process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level)
 when Level > 0 andalso SelfKey == NewKey ->
-
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, -1}] ->
             io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
@@ -575,7 +571,6 @@ when Level > 0 andalso SelfKey == NewKey ->
 
 
 join_process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
-
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, -1}] ->
             io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
@@ -716,7 +711,6 @@ join_process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 %% Returns:
 %%--------------------------------------------------------------------
 join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
-
     io:format("join_process_1: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -902,13 +896,11 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 %%--------------------------------------------------------------------
 join_process_0_oneway(SelfKey, {From, _Server, NewKey, _MembershipVector}, Level)
 when Level == 0 andalso SelfKey == NewKey ->
-
     gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}});
 
 
 join_process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level)
 when Level > 0 andalso SelfKey == NewKey ->
-
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, -1}] ->
             io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
@@ -1093,7 +1085,6 @@ join_process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
 %% Returns:
 %%--------------------------------------------------------------------
 join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
-
     io:format("join_process_1_oneway: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
