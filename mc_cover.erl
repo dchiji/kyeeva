@@ -1,10 +1,37 @@
 -module(mc_cover).
--export([start/0]).
+-export([start/0, init/1]).
+-behaviour(supervisor).
 
 -define(PORT, 5678).
 
 
 start() ->
+    supervisor:start_link({local, ?MODULE}, spd, []).
+
+
+init(_Args) ->
+    RestartStrategy = one_for_one,
+    MaxR = 1,
+    MaxT = 60,
+    ChildSpec = [childspec()],
+
+    {ok, {{RestartStrategy, MaxR, MaxT}, ChildSpec}}.
+
+
+childspec() ->
+    childspec({?MODULE, mc_cover, []}).
+
+childspec(StartFunc) ->
+    ID = ?MODULE,
+    Restart = permanent,
+    Shutdown = transient,
+    Type = worker,
+    Modules = [?MODULE],
+
+    {ID, StartFunc, Restart, Shutdown, Type, Modules}.
+
+
+mc_cover() ->
     {ok, LSock} = gen_tcp:listen(
         ?PORT,
         [binary,
@@ -12,13 +39,15 @@ start() ->
             {active, false},
             {reuseaddr, true}]),
 
-    spawn(fun() -> loop(LSock) end).
+    accept_loop(LSock).
 
 
 accept_loop(LSock) ->
     {ok, Sock} = gen_tcp:accept(LSock),
-    
-    spawn(fun() -> recv_loop(Sock) end),
+
+    ChildSpec = childspec({?MODULE, recv_loop, [Sock]}),
+    supervisor:start_child(?MODULE, ChildSpec),
+
     accept_loop(LSock).
 
 
@@ -34,10 +63,11 @@ recv_loop(Sock) ->
                             gen_tcp:send(Sock, "END\r\n");
 
                         {ok, Items} ->
-                            gen_tcp:send(
-                                Sock,
-                                %io_lib:format("VALUE ~s 0 ~w¥r¥n~s¥r¥nEND¥r¥n",
-                                %    [Key, size(Value), Value]))
+                            %gen_tcp:send(
+                            %    Sock,
+                            %    io_lib:format("VALUE ~s 0 ~w¥r¥n~s¥r¥nEND¥r¥n",
+                            %        [Key, size(Value), Value]))
+                            pass
                     end;
 
                 ["get", Key] ->
