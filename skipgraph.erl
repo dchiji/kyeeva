@@ -56,20 +56,6 @@
 %% Returns:
 %%--------------------------------------------------------------------
 start(Initial) ->
-    % {Key, {Value, MembershipVector, Neighbor}}
-    %   MembershipVector : <<1, 0, 1, 1, ...>>
-    %   Neighbor : {Smaller, Bigger}
-    %     Smaller : [{Node, Key}, ...]
-    %     Smaller : [{Node, Key}, ...]
-    T = ets:new('Peer', [ordered_set, public, named_table]),
-    ets:new('Lock-Update-Daemon', [set, public, named_table]),
-    ets:new('Lock-Join-Daemon', [set, public, named_table]),
-    ets:new('Joining-Wait', [set, public, named_table]),
-    ets:new('Incomplete', [set, public, named_table]),
-    ets:new('ETS-Table', [set, public, named_table]),
-
-    ets:insert('ETS-Table', {?MODULE, T}),
-
     case Initial of
         '__none__' ->
             %gen_server:start_link({local, ?MODULE}, ?MODULE, ['__none__', make_membership_vector()], [{debug, [trace, log]}]);
@@ -94,6 +80,21 @@ start(Initial) ->
 %% Returns:
 %%--------------------------------------------------------------------
 init(Arg) ->
+    % {Key, {Value, MembershipVector, Neighbor}}
+    %   MembershipVector : <<1, 0, 1, 1, ...>>
+    %   Neighbor : {Smaller, Bigger}
+    %     Smaller : [{Node, Key}, ...]
+    %     Smaller : [{Node, Key}, ...]
+    T = ets:new('Peer', [ordered_set, public, named_table]),
+
+    ets:new('Lock-Update-Daemon', [set, public, named_table]),
+    ets:new('Lock-Join-Daemon', [set, public, named_table]),
+    ets:new('Joining-Wait', [set, public, named_table]),
+    ets:new('Incomplete', [set, public, named_table]),
+    ets:new('ETS-Table', [set, public, named_table]),
+
+    ets:insert('ETS-Table', {?MODULE, T}),
+
     {ok, Arg}.
 
 
