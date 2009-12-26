@@ -1,6 +1,6 @@
 -module(test).
 -export([test/0]).
--export([mv_test/0, join_test/0]).
+-export([mv_test/0, join_test/2]).
 
 
 test() ->
