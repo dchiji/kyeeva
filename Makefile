@@ -8,7 +8,7 @@
 
 ERL = erl 
 
-MODS = skipgraph test
+MODS = skipgraph test mc_cover
 
 all: compile
 
