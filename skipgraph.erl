@@ -578,6 +578,13 @@ handle_call({SelfKey, {'remove-process-0', {From, RemovedKey, Neighbor}}, Level}
     {noreply, State}.
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call <remove-process-2>
+%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
+%%                  remove_process_2を，他の処理をlockして呼び出す．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Level},
     _From,
     State) ->
@@ -594,6 +601,13 @@ handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Lev
     {noreply, State};
 
 
+%%--------------------------------------------------------------------
+%% Function: handle_call <remove-process-3>
+%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
+%%                  remove_process_3を，他の処理をlockして呼び出す．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Level},
     _From,
     State) ->
@@ -1397,6 +1411,14 @@ remove_process_0(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
     end.
 
 
+%%--------------------------------------------------------------------
+%% Function: remove_process_1
+%% Description(ja): remove_process_0/3関数から呼び出される．
+%%                  SelfKey == RemovedKey
+%%                  片方のNeighborにremove-process-2メッセージを送信．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 remove_process_1(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -1431,6 +1453,14 @@ remove_process_1(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
     end.
 
 
+%%--------------------------------------------------------------------
+%% Function: remove_process_2
+%% Description(ja): handle_call<remove-process-2>から呼び出される．
+%%                  実際にremove処理を行い，NewNeighborにremove-process-3
+%%                  メッセージを送信．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 remove_process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
