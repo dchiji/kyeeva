@@ -531,7 +531,96 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     end,
 
     lock_join(SelfKey, F),
-    {reply, '__none__', State}.
+    {reply, '__none__', State};
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_call <remove-process-0> [0]
+%% Description(ja): remove-process-0にFromを渡して再度呼ぶ．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'remove-process-0', {RemovedKey, Neighbor}}, Level},
+    From,
+    State) ->
+
+    spawn(fun() ->
+                gen_server:call(whereis(?MODULE),
+                    {SelfKey,
+                        {'remove-process-0',
+                            {From,
+                                RemovedKey,
+                                Neighbor}},
+                        Level})
+        end),
+
+    {noreply, State};
+
+%%--------------------------------------------------------------------
+%% Function: handle_call <remove-process-0> [1]
+%% Description(ja): remove_process_0/3関数をlock_joinに与える
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'remove-process-0', {From, RemovedKey, Neighbor}}, Level},
+    _From,
+    State) ->
+
+    F = fun() ->
+            remove_process_0(SelfKey,
+                {From,
+                    RemovedKey,
+                    Neighbor},
+                Level)
+    end,
+
+    lock_join(SelfKey, F),
+    {noreply, State}.
+
+
+%%--------------------------------------------------------------------
+%% Function: terminate
+%% Description(ja): gen_server内でエラーが発生したとき，再起動させる．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+terminate(_Reason, State) ->
+    spawn(fun() ->
+                test(),
+                unregister(?MODULE),
+                gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
+        end),
+    ok.
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_cast
+%% Description(ja): 何もしない
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_cast(_Message, State) ->
+    {noreply, State}.
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_info
+%% Description(ja): 何もしない
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_info(_Info, State) ->
+    {noreply, State}.
+
+
+%%--------------------------------------------------------------------
+%% Function: code_change
+%% Description(ja): 何もしない
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+code_change(_OldVsn, State, _NewVsn) ->
+    {ok, State}.
 
 
 
@@ -1223,51 +1312,45 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: terminate
-%% Description(ja): gen_server内でエラーが発生したとき，再起動させる．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
-terminate(_Reason, State) ->
-    spawn(fun() ->
-                test(),
-                unregister(?MODULE),
-                gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
-        end),
-    ok.
 
+%%====================================================================
+%% remove-process callbacks
+%%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: handle_cast
-%% Description(ja): 何もしない
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
-handle_cast(_Message, State) ->
-    {noreply, State}.
+remove_process_0(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
+    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
+    {Is_Self, {NeighborNode, NeighborKey}, S_or_B} = if
+        SelfKey == Key ->
+            {true, Smaller, smaller};
+        SelfKey < Key ->
+            {false, Bigger, bigger};
+        Key < SelfKey ->
+            {false, Smaller, smaller}
+    end,
 
-%%--------------------------------------------------------------------
-%% Function: handle_info
-%% Description(ja): 何もしない
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
-handle_info(_Info, State) ->
-    {noreply, State}.
+    case Is_Self of
+        true ->
+            gen_server:call(NeighborNode,
+                {NeighborKey,
+                    {'remove_process_0',
+                        {From,
+                            RemovedKey,
+                            NextNeighbor}},
+                    Level});
 
-
-%%--------------------------------------------------------------------
-%% Function: code_change
-%% Description(ja): 何もしない
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
-code_change(_OldVsn, State, _NewVsn) ->
-    {ok, State}.
-
-
+        false ->
+            case NeighborKey of
+                RemovedKey ->
+                    case S_or_B of
+                        smaller ->
+                            gen_server:call(NeighborNode,
+                                {NeighborKey,
+                                    {'remove_process_0',
+                                        {From,
+                                            RemovedKey,
+                                            NextNeighbor}},
+                                    Level});
 
 %%====================================================================
 %% Utilities (Transactions)
