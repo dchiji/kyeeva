@@ -1612,15 +1612,9 @@ join(InitPeer, Key, Value, MembershipVector) ->
     join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}, 0).
 
 join(_, Key, _, _, _, _, 100) ->
-    [{Key, Pid}] = ets:lookup('Incomplete', Key),
-    erlang:exit(Pid, kill),
-
     ets:delete('Incomplete', Key),
     ok;
 join(_, Key, _, _, ?LEVEL_MAX, _, _) ->
-    [{Key, Pid}] = ets:lookup('Incomplete', Key),
-    erlang:exit(Pid, kill),
-
     ets:delete('Incomplete', Key),
     ok;
 join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN) ->
@@ -1647,18 +1641,12 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                 Self ->
                     case ets:lookup('Incomplete', Key) of
                         [{Key, -1}] ->
-                            [{Key, Pid}] = ets:lookup('Incomplete', Key),
-                            erlang:exit(Pid, kill),
-
                             ets:delete('Incomplete', Key),
                             gen_server:call(Node, {Key, {put, Value}});
                         [{Key, _}] ->
                             gen_server:call(Node, {Key, {put, Value}})
                     end;
                 _ ->
-                    [{Key, Pid}] = ets:lookup('Incomplete', Key),
-                    erlang:exit(Pid, kill),
-
                     ets:delete('Incomplete', Key),
                     ets:delete('Lock-Join-Daemon', Key),
                     ets:delete('Lock-Update-Daemon', Key),
@@ -1668,9 +1656,6 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
             ok;
 
         {ok, {{'__none__', '__none__'}, {'__none__', '__none__'}}, _} ->
-            [{NewKey, Pid}] = ets:lookup('Incomplete', NewKey),
-            erlang:exit(Pid, kill),
-
             ets:delete('Incomplete', NewKey),
             ok;
 
@@ -1724,9 +1709,6 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
         {error, mismatch} ->
             case OtherPeer of
                 {'__none__', '__none__'} ->
-                    [{NewKey, Pid}] = ets:lookup('Incomplete', NewKey),
-                    erlang:exit(Pid, kill),
-
                     ets:delete('Incomplete', NewKey),
                     ok;
                 _ ->
@@ -1748,15 +1730,9 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
 join_oneway(_, Key, _, _, _, 10) ->
-    [{Key, Pid}] = ets:lookup('Incomplete', Key),
-    erlang:exit(Pid, kill),
-
     ets:delete('Incomplete', Key),
     ok;
 join_oneway(_, Key, _, _, ?LEVEL_MAX, _) ->
-    [{Key, Pid}] = ets:lookup('Incomplete', Key),
-    erlang:exit(Pid, kill),
-
     ets:delete('Incomplete', Key),
     ok;
 join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN) ->
@@ -1783,18 +1759,12 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
                 Self ->
                     case ets:lookup('Incomplete', Key) of
                         [{Key, -1}] ->
-                            [{Key, Pid}] = ets:lookup('Incomplete', Key),
-                            erlang:exit(Pid, kill),
-
                             ets:delete('Incomplete', Key),
                             gen_server:call(Node, {Key, {put, Value}});
                         [{Key, _}] ->
                             gen_server:call(Node, {Key, {put, Value}})
                     end;
                 _ ->
-                    [{Key, Pid}] = ets:lookup('Incomplete', Key),
-                    erlang:exit(Pid, kill),
-
                     ets:delete('Peer', Key),
                     ets:delete('Incomplete', Key),
                     gen_server:call(Node, {Key, {put, Value}})
@@ -1802,9 +1772,6 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
             ok;
 
         {ok, {'__none__', '__none__'}, _} ->
-            [{NewKey, Pid}] = ets:lookup('Incomplete', NewKey),
-            erlang:exit(Pid, kill),
-
             ets:delete('Incomplete', NewKey),
             ok;
 
@@ -1826,9 +1793,6 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
             join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN + 1);
 
         {error, mismatch} ->
-            [{NewKey, Pid}] = ets:lookup('Incomplete', NewKey),
-            erlang:exit(Pid, kill),
-
             ets:delete('Incomplete', NewKey),
             ok;
 
