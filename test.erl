@@ -18,14 +18,14 @@ test() ->
     timer:sleep(infinity).
 
 join_test() ->
-    join_test(1, 1000).
+    join_test(1, 100000).
 
 join_test(N, N) ->
     ok;
 join_test(N, M) ->
-    %skipgraph:join(N),
-    spawn(fun() -> skipgraph:join(N) end),
-    timer:sleep(5),
+    skipgraph:join(N),
+    %spawn(fun() -> skipgraph:join(N) end),
+    %timer:sleep(5),
     join_test(N + 1, M).
 
 

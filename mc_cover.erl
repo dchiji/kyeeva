@@ -114,6 +114,10 @@ recv_loop(Sock) ->
                             pass
                     end;
 
+                ["delete", Key] ->
+                    pass,
+                    gen_tcp:send(Sock, "DELETED¥r¥n");
+
                 ["get", Key] ->
                     case skipgraph:get(Key, Key) of
                         {ok, []} ->
@@ -124,6 +128,16 @@ recv_loop(Sock) ->
                                 Sock,
                                 io_lib:format("VALUE ~s 0 ~w¥r¥n~s¥r¥nEND¥r¥n",
                                     [Key, size(Value), Value]))
+                    end;
+
+                ["set", Key, _Flags, _Expire, Bytes] ->
+                    case gen_tcp:recv(Sock, list_to_integer(Bytes)) of
+                        {ok, Value} ->
+                            skipgraph:join(Key, Value),
+                            gen_tcp:send(Sock, "STORED¥r¥n");
+
+                        {error, closed} ->
+                            ok
                     end
             end,
             recv_loop(Sock);
