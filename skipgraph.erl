@@ -578,6 +578,45 @@ handle_call({SelfKey, {'remove-process-0', {From, RemovedKey, Neighbor}}, Level}
     {noreply, State}.
 
 
+handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Level},
+    _From,
+    State) ->
+
+    F = fun() ->
+            remove_process_2(SelfKey,
+                {From,
+                    RemovedKey},
+                NewNeighbor,
+                Level)
+    end,
+
+    lock_join(SelfKey, F),
+    {noreply, State};
+
+
+handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Level},
+    _From,
+    State) ->
+
+    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
+    {OldNode, OldKey} = if
+        SelfKey < RemovedKey ->
+            lists:nth(Smaller, Level + 1);
+        RemovedKey < SelfKey ->
+            lists:nth(Bigger, Level + 1)
+    end,
+
+    case OldKey of
+        RemovedKey ->
+            update(SelfKey, NewNeighbor, Level);
+        _ ->
+            pass
+    end,
+
+    {noreply, State}.
+
+
 %%--------------------------------------------------------------------
 %% Function: terminate
 %% Description(ja): gen_server内でエラーが発生したとき，再起動させる．
@@ -918,29 +957,7 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                 Self ->
                                     io:format("update1, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, OtherKey, NewKey]),
                                     update(SelfKey, {Server, NewKey}, Level),
-                                    update(OtherKey, {Server, NewKey}, Level),
-                                    if
-                                        NewKey < SelfKey ->
-                                            gen_server:reply(From, {ok, {{Self, OtherKey}, {Self, SelfKey}}, {self(), Ref}});
-                                        SelfKey < NewKey ->
-                                            gen_server:reply(From, {ok, {{Self, SelfKey}, {Self, OtherKey}}, {self(), Ref}})
-                                    end,
-
-                                    % reply先がNeighborの更新に成功するまで待機
-                                    receive
-                                        {ok, Ref} ->
-                                            ok
-                                    end,
-
-                                    case ets:lookup('ETS-Table', Server) of
-                                        [] ->
-                                            spawn(fun() ->
-                                                        Tab = gen_server:call(Server, {'get-ets-table'}),
-                                                        ets:insert('ETS-Table', {Server, Tab})
-                                                end);
-                                        _ ->
-                                            ok
-                                    end;
+                                    update(OtherKey, {Server, NewKey}, Level);
 
                                 _ ->
                                     gen_server:call(OtherNode,
@@ -953,6 +970,29 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                             {whereis(?MODULE), SelfKey}}),
                                     update(SelfKey, {Server, NewKey}, Level)
                             end
+                    end,
+
+                    if
+                        NewKey < SelfKey ->
+                            gen_server:reply(From, {ok, {{Self, OtherKey}, {Self, SelfKey}}, {self(), Ref}});
+                        SelfKey < NewKey ->
+                            gen_server:reply(From, {ok, {{Self, SelfKey}, {Self, OtherKey}}, {self(), Ref}})
+                    end,
+
+                    % reply先がNeighborの更新に成功するまで待機
+                    receive
+                        {ok, Ref} ->
+                            ok
+                    end,
+
+                    case ets:lookup('ETS-Table', Server) of
+                        [] ->
+                            spawn(fun() ->
+                                        Tab = gen_server:call(Server, {'get-ets-table'}),
+                                        ets:insert('ETS-Table', {Server, Tab})
+                                end);
+                        _ ->
+                            ok
                     end
             end;
 
@@ -1317,40 +1357,115 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
 %% remove-process callbacks
 %%====================================================================
 
+%%--------------------------------------------------------------------
+%% Function: remove_process_0
+%% Description(ja): handle_call<remove-process-0>から呼び出される．
+%%                  最もNewKeyに近いピアを(内側に向かって)探索する．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
 remove_process_0(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
-    {Is_Self, {NeighborNode, NeighborKey}, S_or_B} = if
+    {IsSelf, {NeighborNode, NeighborKey}, S_or_B} = if
         SelfKey == Key ->
-            {true, Smaller, smaller};
+            {true, lists:nth(Smaller, Level + 1), smaller};
         SelfKey < Key ->
-            {false, Bigger, bigger};
+            {false, lists:nth(Bigger, Level + 1), bigger};
         Key < SelfKey ->
-            {false, Smaller, smaller}
+            {false, lists:nth(Smaller, Level + 1), smaller}
     end,
 
-    case Is_Self of
+    case IsSelf of
         true ->
-            gen_server:call(NeighborNode,
-                {NeighborKey,
-                    {'remove_process_0',
-                        {From,
-                            RemovedKey,
-                            NextNeighbor}},
-                    Level});
+            join_process_1(SelfKey,
+                {From,
+                    RemovedKey,
+                    NextNeighbor},
+                Level);
 
         false ->
-            case NeighborKey of
-                RemovedKey ->
-                    case S_or_B of
-                        smaller ->
-                            gen_server:call(NeighborNode,
-                                {NeighborKey,
-                                    {'remove_process_0',
-                                        {From,
-                                            RemovedKey,
-                                            NextNeighbor}},
-                                    Level});
+            spawn(fun() ->
+                        gen_server:call(NeighborNode,
+                            {NeighborKey,
+                                {'remove-process-0',
+                                    {From,
+                                        RemovedKey,
+                                        NextNeighbor},
+                                    Level}})
+                end)
+    end.
+
+
+remove_process_1(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
+    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
+    case Smaller of
+        {'__none__', '__none__'} ->
+            case Bigger of
+                {'__none__', '__none__'} ->
+                    pass;
+                _ ->
+                    {BiggerNode, BiggerKey} = lists:nth(Bigger, Level + 1),
+
+                    gen_server:call(BiggerNode,
+                        {BiggerKey,
+                            {'remove-process-2',
+                                {From,
+                                    RemovedKey}},
+                            Smaller,
+                            Level},
+                        ?TIMEOUT)
+            end;
+        _ ->
+            {SmallerNode, SmallerKey} = lists:nth(Smaller, Level + 1),
+
+            gen_server:call(SmallerNode,
+                {SmallerKey,
+                    {'remove-process-2',
+                        {From,
+                            RemovedKey}},
+                    Bigger,
+                    Level},
+                ?TIMEOUT)
+    end.
+
+
+remove_process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
+    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+
+    {OldNode, OldKey} = if
+        SelfKey < RemovedKey ->
+            lists:nth(Smaller, Level + 1);
+        RemovedKey < SelfKey ->
+            lists:nth(Bigger, Level + 1)
+    end,
+
+    case OldKey of
+        RemovedKey ->
+            case NewNeighbor of
+                {'__none__', '__none__'} ->
+                    update(SelfKey, NewNeighbor, Level);
+
+                {NewNode, NewKey} ->
+                    gen_server:call(NewNode,
+                        {NewKey,
+                            {'remove-process-3',
+                                {From,
+                                    RemovedKey},
+                                {whereis(?MODULE), SelfKey},
+                                Level}}),
+
+                    update(SelfKey, NewNeighbor, Level)
+            end;
+
+        _ ->
+            pass
+    end,
+
+    gen_server:reply(From, {ok, removed}).
+
+
 
 %%====================================================================
 %% Utilities (Transactions)
