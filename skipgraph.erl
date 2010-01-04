@@ -237,10 +237,14 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
                     case ets:lookup('ETS-Table', BestNode) of
                         [{BestNode, Tab}] ->
                             [{BestNode, Tab} | _] = ets:lookup('ETS-Table', BestNode),
-                            [{Key0, {Value, _, _}} | _] = ets:lookup(Tab, Key0),
+                            case ets:lookup(Tab, Key0) of
+                                [{Key0, {Value, _, _}} | _] ->
+                                    io:format("ets~n"),
+                                    gen_server:reply(From, {ok, [{Key0, Value}]});
 
-                            io:format("ets~n"),
-                            gen_server:reply(From, {ok, [{Key0, Value}]});
+                                [] ->
+                                    gen_server:reply(From, {ok, []})
+                            end;
 
                         _ ->
                             spawn(fun() ->
@@ -575,11 +579,11 @@ handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level},
     end,
 
     lock_join(SelfKey, F),
-    {noreply, State};
+    {reply, '__none__', State};
 
 
 %%--------------------------------------------------------------------
-%% Function: handle_call <remove-process-0> [1]
+%% Function: handle_call <remove-process-1> [0]
 %% Description(ja): remove-process-1にFromを渡して再度呼ぶ．
 %% Description(en): 
 %% Returns:
@@ -618,7 +622,7 @@ handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
     end,
 
     lock_join(SelfKey, F),
-    {noreply, State};
+    {reply, '__none__', State};
 
 
 %%--------------------------------------------------------------------
@@ -641,7 +645,7 @@ handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Lev
     end,
 
     lock_join(SelfKey, F),
-    {noreply, State};
+    {reply, '__none__', State};
 
 
 %%--------------------------------------------------------------------
@@ -659,9 +663,9 @@ handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Lev
 
     {OldNode, OldKey} = if
         SelfKey < RemovedKey ->
-            lists:nth(Smaller, Level + 1);
+            lists:nth(Level + 1, Smaller);
         RemovedKey < SelfKey ->
-            lists:nth(Bigger, Level + 1)
+            lists:nth(Level + 1, Bigger)
     end,
 
     case OldKey of
@@ -671,7 +675,7 @@ handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Lev
             pass
     end,
 
-    {noreply, State}.
+    {reply, '__none__', State}.
 
 
 %%--------------------------------------------------------------------
@@ -1446,11 +1450,11 @@ remove_process_0(SelfKey, {From, RemovedKey}, Level) ->
 
     {IsSelf, {NeighborNode, NeighborKey}, S_or_B} = if
         SelfKey == RemovedKey ->
-            {true, lists:nth(Smaller, Level + 1), smaller};
+            {true, lists:nth(Level + 1, Smaller), smaller};
         SelfKey < RemovedKey ->
-            {false, lists:nth(Bigger, Level + 1), bigger};
+            {false, lists:nth(Level + 1, Bigger), bigger};
         RemovedKey < SelfKey ->
-            {false, lists:nth(Smaller, Level + 1), smaller}
+            {false, lists:nth(Level + 1, Smaller), smaller}
     end,
 
     case IsSelf of
@@ -1484,35 +1488,36 @@ remove_process_1(SelfKey, {From, RemovedKey}, Level) ->
 
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
-    case Smaller of
+    case lists:nth(Level + 1, Smaller) of
         {'__none__', '__none__'} ->
-            case Bigger of
+            case lists:nth(Level + 1, Bigger) of
                 {'__none__', '__none__'} ->
                     gen_server:reply(From, {ok, removed});
-                _ ->
-                    {BiggerNode, BiggerKey} = lists:nth(Bigger, Level + 1),
 
-                    gen_server:call(BiggerNode,
-                        {BiggerKey,
-                            {'remove-process-2',
-                                {From,
-                                    RemovedKey}},
-                            Smaller,
-                            Level},
-                        ?TIMEOUT)
+                {BiggerNode, BiggerKey} ->
+                    spawn(fun() ->
+                                gen_server:call(BiggerNode,
+                                    {BiggerKey,
+                                        {'remove-process-2',
+                                            {From,
+                                                RemovedKey}},
+                                        Smaller,
+                                        Level},
+                                    ?TIMEOUT)
+                        end)
             end;
 
-        _ ->
-            {SmallerNode, SmallerKey} = lists:nth(Smaller, Level + 1),
-
-            gen_server:call(SmallerNode,
-                {SmallerKey,
-                    {'remove-process-2',
-                        {From,
-                            RemovedKey}},
-                    Bigger,
-                    Level},
-                ?TIMEOUT)
+        {SmallerNode, SmallerKey} ->
+            spawn(fun() ->
+                        gen_server:call(SmallerNode,
+                            {SmallerKey,
+                                {'remove-process-2',
+                                    {From,
+                                        RemovedKey}},
+                                Bigger,
+                                Level},
+                            ?TIMEOUT)
+                end)
     end.
 
 
@@ -1529,9 +1534,9 @@ remove_process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
 
     {OldNode, OldKey} = if
         SelfKey < RemovedKey ->
-            lists:nth(Smaller, Level + 1);
+            lists:nth(Level + 1, Smaller);
         RemovedKey < SelfKey ->
-            lists:nth(Bigger, Level + 1)
+            lists:nth(Level + 1, Bigger)
     end,
 
     case OldKey of
@@ -1740,6 +1745,16 @@ update(SelfKey, {Server, NewKey}, Level) ->
     F = fun([{_, {Value, MembershipVector, {Smaller, Bigger}}}]) ->
             io:format("NewKey=~p  SelfKey=~p~n", [NewKey, SelfKey]),
             if
+                {Server, NewKey} == {'__none__', '__none__'} ->
+                    {SFront, [_ | STail]} = lists:split(Level, Smaller),
+                    {BFront, [_ | BTail]} = lists:split(Level, Bigger),
+
+                    NewSmaller = SFront ++ [{Server, NewKey} | STail],
+                    NewBigger = BFront ++ [{Server, NewKey} | BTail],
+
+                    io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
+                    {ok, {SelfKey, {Value, MembershipVector, {NewSmaller, NewBigger}}}};
+
                 NewKey < SelfKey ->
                     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
 
@@ -2270,12 +2285,14 @@ remove(Key) ->
                     end
             end,
 
-            lock_update('Incomplete', F)
+            lock_update('Incomplete', Key, F)
     end,
 
     remove(Key, ?LEVEL_MAX - 1).
 
 
+remove(Key, -1) ->
+    ets:delete('Peer', Key);
 remove(Key, Level) ->
     Result = gen_server:call(?MODULE,
         {Key,
@@ -2288,10 +2305,12 @@ remove(Key, Level) ->
             {error, 'already-removing'};
 
         {ok, removed} ->
+            update(Key, {'__none__', '__none__'}, Level),
+
             F = fun([{Key, {{join, _N}, {remove, Level}}}]) ->
                     {ok, {Key, {{join, _N}, {remove, Level - 1}}}}
             end,
-            lock_update('Incomplete', F),
+            lock_update('Incomplete', Key, F),
 
             remove(Key, Level - 1)
     end.
