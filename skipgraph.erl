@@ -35,7 +35,7 @@
 
 -export([start/1, init/1, handle_call/3, terminate/2,
         handle_cast/2, handle_info/2, code_change/3,
-        join/1, join/2, test/0, get/1, get/2, put/2]).
+        join/1, join/2, remove/1, test/0, get/1, get/2, put/2]).
 
 -export([get_server/0, get_peer/0]).
 
@@ -551,8 +551,7 @@ handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level},
                     {SelfKey,
                         {'remove-process-0',
                             {From,
-                                RemovedKey,
-                                Neighbor}},
+                                RemovedKey}},
                         Level})
         end),
 
@@ -571,13 +570,55 @@ handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level},
     F = fun() ->
             remove_process_0(SelfKey,
                 {From,
-                    RemovedKey,
-                    Neighbor},
+                    RemovedKey},
                 Level)
     end,
 
     lock_join(SelfKey, F),
-    {noreply, State}.
+    {noreply, State};
+
+
+%%--------------------------------------------------------------------
+%% Function: handle_call <remove-process-0> [1]
+%% Description(ja): remove-process-1にFromを渡して再度呼ぶ．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level},
+    From,
+    State) ->
+
+    spawn(fun() ->
+                gen_server:call(whereis(?MODULE),
+                    {SelfKey,
+                        {'remove-process-1',
+                            {From,
+                                RemovedKey}},
+                        Level})
+        end),
+
+    {noreply, State};
+
+%%--------------------------------------------------------------------
+%% Function: handle_call <remove-process-1> [1]
+%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
+%%                  remove_process_1を，他の処理をlockして呼び出す．
+%% Description(en): 
+%% Returns:
+%%--------------------------------------------------------------------
+handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
+    _From,
+    State) ->
+
+    F = fun() ->
+            remove_process_1(SelfKey,
+                {From,
+                    RemovedKey},
+                Level)
+    end,
+
+    lock_join(SelfKey, F),
+    {noreply, State};
 
 
 %%--------------------------------------------------------------------
@@ -996,7 +1037,7 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                                     {whereis(?MODULE), SelfKey}}),
                                             update(SelfKey, {Server, NewKey}, Level)
                                     end
-                            end
+                            end,
 
                             if
                                 NewKey < SelfKey ->
@@ -1400,22 +1441,22 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
 %% Description(en): 
 %% Returns:
 %%--------------------------------------------------------------------
-remove_process_0(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
+remove_process_0(SelfKey, {From, RemovedKey}, Level) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     {IsSelf, {NeighborNode, NeighborKey}, S_or_B} = if
-        SelfKey == Key ->
+        SelfKey == RemovedKey ->
             {true, lists:nth(Smaller, Level + 1), smaller};
-        SelfKey < Key ->
+        SelfKey < RemovedKey ->
             {false, lists:nth(Bigger, Level + 1), bigger};
-        Key < SelfKey ->
+        RemovedKey < SelfKey ->
             {false, lists:nth(Smaller, Level + 1), smaller}
     end,
 
     case IsSelf of
         true ->
             spawn(fun() ->
-                        join(RemovedKey)
+                        remove(RemovedKey)
                 end);
 
         false ->
@@ -1424,8 +1465,7 @@ remove_process_0(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
                             {NeighborKey,
                                 {'remove-process-0',
                                     {From,
-                                        RemovedKey,
-                                        NextNeighbor},
+                                        RemovedKey},
                                     Level}})
                 end)
     end.
@@ -1439,14 +1479,16 @@ remove_process_0(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
 %% Description(en): 
 %% Returns:
 %%--------------------------------------------------------------------
-remove_process_1(SelfKey, {From, RemovedKey, NextNeighbor}, Level) ->
+remove_process_1(SelfKey, {From, RemovedKey}, Level) ->
+    io:format("Peer[SelfKey] = ~p~n", [ets:lookup('Peer', SelfKey)]),
+
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     case Smaller of
         {'__none__', '__none__'} ->
             case Bigger of
                 {'__none__', '__none__'} ->
-                    gen_server:reply(From, {ok});
+                    gen_server:reply(From, {ok, removed});
                 _ ->
                     {BiggerNode, BiggerKey} = lists:nth(Bigger, Level + 1),
 
@@ -1570,7 +1612,7 @@ wait_trapped(Receive) ->
             end
     end,
 
-    wait_trapped().
+    wait_trapped(Receive).
 
 
 %%--------------------------------------------------------------------
@@ -1627,18 +1669,18 @@ lock_update(Key, F) ->
 lock_update(Table, Key, F) ->
     Ref = make_ref(),
 
-    case ets:lookup('Lock-Update-Daemon', Key) of
+    case ets:lookup('Lock-Update-Daemon', {Table, Key}) of
         [] ->
             ets:insert('Lock-Update-Daemon',
-                {Key,
+                {{Table, Key},
                     spawn(fun() ->
                                 lock_daemon(fun lock_update_callback/1)
                         end)}),
 
-            [{Key, Daemon}] = ets:lookup('Lock-Update-Daemon', Key),
+            [{{Table, Key}, Daemon}] = ets:lookup('Lock-Update-Daemon', {Table, Key}),
             Daemon ! {{self(), Ref}, {update, Table, {Key, F}}};
 
-        [{Key, Daemon}] ->
+        [{{Table, Key}, Daemon}] ->
             Daemon ! {{self(), Ref}, {update, Table, {Key, F}}}
     end,
 
@@ -1848,35 +1890,48 @@ join(Key, Value) ->
             case gen_server:call(whereis(?MODULE), {join, Key}) of
                 {ok, {'__none__', '__none__'}} ->
                     ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
-                    ets:insert('Lock-Update-Daemon',
-                        {Key,
-                            spawn(fun() ->
-                                        lock_daemon(fun lock_update_callback/1)
-                                end)}),
                     ets:insert('Lock-Join-Daemon',
                         {Key,
                             spawn(fun() ->
                                         lock_daemon(fun lock_join_callback/1)
+                                end)}),
+
+                    ets:insert('Lock-Update-Daemon',
+                        {{'Peer', Key},
+                            spawn(fun() ->
+                                        lock_daemon(fun lock_update_callback/1)
+                                end)}),
+                    ets:insert('Lock-Update-Daemon',
+                        {{'Incomplete', Key},
+                            spawn(fun() ->
+                                        lock_daemon(fun lock_update_callback/1)
                                 end)});
 
                 {ok, InitPeer} ->
                     ets:insert('Incomplete', {Key, {{join, -1}, {remove, ?LEVEL_MAX}}}),
                     ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
-                    ets:insert('Lock-Update-Daemon',
-                        {Key,
-                            spawn(fun() ->
-                                        lock_daemon(fun lock_update_callback/1)
-                                end)}),
                     ets:insert('Lock-Join-Daemon',
                         {Key,
                             spawn(fun() ->
                                         lock_daemon(fun lock_join_callback/1)
+                                end)}),
+
+                    ets:insert('Lock-Update-Daemon',
+                        {{'Peer', Key},
+                            spawn(fun() ->
+                                        lock_daemon(fun lock_update_callback/1)
+                                end)}),
+                    ets:insert('Lock-Update-Daemon',
+                        {{'Incomplete', Key},
+                            spawn(fun() ->
+                                        lock_daemon(fun lock_update_callback/1)
                                 end)}),
 
                     join(InitPeer, Key, Value, MembershipVector)
             end
     end,
     ok.
+
 
 join(InitPeer, Key, Value, MembershipVector) ->
     join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}, 0).
@@ -1893,6 +1948,7 @@ join(_, Key, _, _, _, _, 100) ->
             end
     end,
     lock_update('Incomplete', Key, F);
+
 join(_, Key, _, _, ?LEVEL_MAX, _, _) ->
     F = fun(Item) ->
             case Item of
@@ -1905,6 +1961,7 @@ join(_, Key, _, _, ?LEVEL_MAX, _, _) ->
             end
     end,
     lock_update('Incomplete', Key, F);
+
 join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN) ->
     Daemon = spawn(fun() -> wait_trap([]) end),
     ets:insert('Joining-Wait',
@@ -1954,7 +2011,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                             {delete, Key}
                     end
             end,
-            lock_update('Incomplete', Key, F);
+            lock_update('Incomplete', NewKey, F);
 
         {ok, {{'__none__', '__none__'}, BiggerPeer}, {Pid, Ref}} ->
             io:format("~nBiggerPeer=~p~n", [BiggerPeer]),
@@ -1962,18 +2019,19 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
             F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
                     case RLevel of
                         ?LEVEL_MAX ->
-                            update(NewKey, BiggerPeer, Level);
-                        _ ->
-                            pass
-                    end,
+                            update(NewKey, BiggerPeer, Level),
+                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
 
-                    {ok, {Key, {{join, Level}, {remove, RLevel}}}}
+                        _ ->
+                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
+                    end
             end,
 
             case lock_update('Incomplete', NewKey, F) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     Daemon ! {error, removing};
+
                 _ ->
                     Pid ! {ok, Ref},
                     Daemon ! {trap}
@@ -1987,18 +2045,19 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
             F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
                     case RLevel of
                         ?LEVEL_MAX ->
-                            update(NewKey, SmallerPeer, Level);
-                        _ ->
-                            pass
-                    end,
+                            update(NewKey, SmallerPeer, Level),
+                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
 
-                    {ok, {Key, {{join, Level}, {remove, RLevel}}}}
+                        _ ->
+                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
+                    end
             end,
 
             case lock_update('Incomplete', NewKey, F) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     Daemon ! {error, removing};
+
                 _ ->
                     Pid ! {ok, Ref},
                     Daemon ! {trap}
@@ -2013,18 +2072,19 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                     case RLevel of
                         ?LEVEL_MAX ->
                             update(NewKey, SmallerPeer, Level),
-                            update(NewKey, BiggerPeer, Level);
-                        _ ->
-                            pass
-                    end,
+                            update(NewKey, BiggerPeer, Level),
+                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
 
-                    {ok, {Key, {{join, Level}, {remove, RLevel}}}}
+                        _ ->
+                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
+                    end
             end,
 
             case lock_update('Incomplete', NewKey, F) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     Daemon ! {error, removing};
+
                 _ ->
                     Pid ! {ok, Ref},
                     Daemon ! {trap}
@@ -2049,7 +2109,8 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                                     {delete, Key}
                             end
                     end,
-                    lock_update('Incomplete', Key, F);
+                    lock_update('Incomplete', NewKey, F);
+
                 _ ->
                     join_oneway(OtherPeer, NewKey, Value, MembershipVector, Level, 0)
             end;
@@ -2139,24 +2200,25 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
                             {delete, Key}
                     end
             end,
-            lock_update('Incomplete', Key, F);
+            lock_update('Incomplete', NewKey, F);
 
         {ok, Peer, {Pid, Ref}} ->
             F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
                     case RLevel of
                         ?LEVEL_MAX ->
-                            update(NewKey, Peer, Level);
-                        _ ->
-                            pass
-                    end,
+                            update(NewKey, Peer, Level),
+                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
 
-                    {ok, {Key, {{join, Level}, {remove, RLevel}}}}
+                        _ ->
+                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
+                    end
             end,
 
             case lock_update('Incomplete', NewKey, F) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     Daemon ! {error, removing};
+
                 _ ->
                     Pid ! {ok, Ref},
                     Daemon ! {trap}
@@ -2179,7 +2241,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
                             {delete, Key}
                     end
             end,
-            lock_update('Incomplete', Key, F);
+            lock_update('Incomplete', NewKey, F);
 
         Message ->
             io:format("*ERR* join/4:unknown message: ~p~n", [Message]),
@@ -2188,7 +2250,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
 
 
 remove(Key) ->
-    case ets:lookup(Key) of
+    case ets:lookup('Peer', Key) of
         [] ->
             {error, noexist};
 
@@ -2196,7 +2258,7 @@ remove(Key) ->
             F = fun(Item) ->
                     case Item of
                         [] ->
-                            {ok, {Key, {{join, ?LEVEL_MAX}, {remove, ?LEVEL_MAX}}}];
+                            {ok, {Key, {{join, ?LEVEL_MAX}, {remove, ?LEVEL_MAX}}}};
 
                         [{Key, {{join, Max}, {remove, _}}}] ->
                             case Max of
@@ -2216,15 +2278,16 @@ remove(Key) ->
 
 remove(Key, Level) ->
     Result = gen_server:call(?MODULE,
-        {Key, {'remove-process-0',
-                {Key},
-                Level}}),
+        {Key,
+            {'remove-process-1',
+                {Key}},
+            Level}),
 
     case Result of
         {already} ->
             {error, 'already-removing'};
 
-        {ok} ->
+        {ok, removed} ->
             F = fun([{Key, {{join, _N}, {remove, Level}}}]) ->
                     {ok, {Key, {{join, _N}, {remove, Level - 1}}}}
             end,
