@@ -133,7 +133,8 @@ handle_call({peer, random}, _From, State) ->
 %%--------------------------------------------------------------------
 %% Function: handle_call <get-ets-table>
 %% Description(ja): ネットワーク先のノードから呼び出される．自ノードの
-%%                  Peerを保持しているETSを呼び出し元に返す
+%%                  Peerを保持しているETSテーブルを呼び出し元に返す．
+%%                  これによりget時の速度を向上させることができる．
 %% Description(en): 
 %% Returns:
 %%--------------------------------------------------------------------
@@ -176,6 +177,7 @@ handle_call({get, Key0, Key1},
                         '__none__' ->
                             gen_server:reply(From,
                                 {ok, {'__none__', '__none__'}});
+
                         _ ->
                             {_, InitKey} = gen_server:call(InitialNode, {peer, random}),
                             gen_server:call(InitialNode,
@@ -1664,7 +1666,10 @@ lock_update_callback({{From, Ref}, {update, Table, {Key, F}}}) ->
             From ! {Ref, {delete, DeletedKey}};
 
         {error, _Reason} ->
-            From ! {Ref, {pass}}
+            From ! {Ref, {pass}};
+
+        {pass} ->
+            From ! {Ref, {ok, []}}
     end.
 
 
@@ -1877,11 +1882,29 @@ join(InitPeer, Key, Value, MembershipVector) ->
     join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}, 0).
 
 join(_, Key, _, _, _, _, 100) ->
-    ets:delete('Incomplete', Key),
-    ok;
+    F = fun(Item) ->
+            case Item of
+                [] ->
+                    {pass};
+                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                [{Key, _}] ->
+                    {delete, Key}
+            end
+    end,
+    lock_update('Incomplete', Key, F);
 join(_, Key, _, _, ?LEVEL_MAX, _, _) ->
-    ets:delete('Incomplete', Key),
-    ok;
+    F = fun(Item) ->
+            case Item of
+                [] ->
+                    {pass};
+                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                [{Key, _}] ->
+                    {delete, Key}
+            end
+    end,
+    lock_update('Incomplete', Key, F);
 join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN) ->
     Daemon = spawn(fun() -> wait_trap([]) end),
     ets:insert('Joining-Wait',
@@ -1921,8 +1944,17 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
             ok;
 
         {ok, {{'__none__', '__none__'}, {'__none__', '__none__'}}, _} ->
-            ets:delete('Incomplete', NewKey),
-            ok;
+            F = fun(Item) ->
+                    case Item of
+                        [] ->
+                            {pass};
+                        [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                        [{Key, _}] ->
+                            {delete, Key}
+                    end
+            end,
+            lock_update('Incomplete', Key, F);
 
         {ok, {{'__none__', '__none__'}, BiggerPeer}, {Pid, Ref}} ->
             io:format("~nBiggerPeer=~p~n", [BiggerPeer]),
@@ -2007,8 +2039,17 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
         {error, mismatch} ->
             case OtherPeer of
                 {'__none__', '__none__'} ->
-                    ets:delete('Incomplete', NewKey),
-                    ok;
+                    F = fun(Item) ->
+                            case Item of
+                                [] ->
+                                    {pass};
+                                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                                [{Key, _}] ->
+                                    {delete, Key}
+                            end
+                    end,
+                    lock_update('Incomplete', Key, F);
                 _ ->
                     join_oneway(OtherPeer, NewKey, Value, MembershipVector, Level, 0)
             end;
@@ -2028,11 +2069,29 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
 join_oneway(_, Key, _, _, _, 10) ->
-    ets:delete('Incomplete', Key),
-    ok;
+    F = fun(Item) ->
+            case Item of
+                [] ->
+                    {pass};
+                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                [{Key, _}] ->
+                    {delete, Key}
+            end
+    end,
+    lock_update('Incomplete', Key, F);
 join_oneway(_, Key, _, _, ?LEVEL_MAX, _) ->
-    ets:delete('Incomplete', Key),
-    ok;
+    F = fun(Item) ->
+            case Item of
+                [] ->
+                    {pass};
+                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                [{Key, _}] ->
+                    {delete, Key}
+            end
+    end,
+    lock_update('Incomplete', Key, F);
 join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN) ->
     Daemon = spawn(fun() -> wait_trap([]) end),
     ets:insert('Joining-Wait',
@@ -2070,8 +2129,17 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
             ok;
 
         {ok, {'__none__', '__none__'}, _} ->
-            ets:delete('Incomplete', NewKey),
-            ok;
+            F = fun(Item) ->
+                    case Item of
+                        [] ->
+                            {pass};
+                        [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                        [{Key, _}] ->
+                            {delete, Key}
+                    end
+            end,
+            lock_update('Incomplete', Key, F);
 
         {ok, Peer, {Pid, Ref}} ->
             F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
@@ -2101,8 +2169,17 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
             join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN + 1);
 
         {error, mismatch} ->
-            ets:delete('Incomplete', NewKey),
-            ok;
+            F = fun(Item) ->
+                    case Item of
+                        [] ->
+                            {pass};
+                        [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
+                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                        [{Key, _}] ->
+                            {delete, Key}
+                    end
+            end,
+            lock_update('Incomplete', Key, F);
 
         Message ->
             io:format("*ERR* join/4:unknown message: ~p~n", [Message]),
