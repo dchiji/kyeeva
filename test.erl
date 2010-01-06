@@ -5,13 +5,14 @@
 
 test() ->
     {ok, Server} = skipgraph:start('__none__'),
+
     skipgraph:join(0),
     join_test(),
-    %io:format("~nResult: ~p~n", [{
-    %            {join_test, join_test()},
-    %            {get_test, get_test()},
-    %            {put_test, put_test()}}]),
-    %io:format("~nget(36)=~p~nget(50, 282)=~p~n", [skipgraph:get(32), skipgraph:get(50, 282)]),
+
+    timer:sleep(30000),
+
+    skipgraph:remove(10),
+    io:format("get(10)=~p~n", [skipgraph:get(10)]),
 
     timer:sleep(infinity).
 
