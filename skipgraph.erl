@@ -53,7 +53,7 @@
 %% Function: start
 %% Description(ja): 初期化を行い，gen_serverを起動する．
 %% Description(en): 
-%% Returns:
+%% Returns: Server
 %%--------------------------------------------------------------------
 start(Initial) ->
     case Initial of
@@ -93,12 +93,7 @@ start(Initial) ->
 %% gen_server callbacks
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: init
-%% Description(ja): gen_server:start_linkにより呼び出される．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% gen_server:start_linkにより呼び出される．
 init(Arg) ->
     % {Key, {Value, MembershipVector, Neighbor}}
     %   MembershipVector : <<1, 0, 1, 1, ...>>
@@ -123,7 +118,7 @@ init(Arg) ->
 %% Description(ja): ネットワーク先のノードから呼び出される．適当なピアを
 %%                  呼び出し元に返す．
 %% Description(en): 
-%% Returns:
+%% Returns: {Pid, Key}
 %%--------------------------------------------------------------------
 handle_call({peer, random}, _From, State) ->
     [{SelfKey, {_, _, _}} | _] = ets:tab2list('Peer'),
@@ -136,19 +131,14 @@ handle_call({peer, random}, _From, State) ->
 %%                  Peerを保持しているETSテーブルを呼び出し元に返す．
 %%                  これによりget時の速度を向上させることができる．
 %% Description(en): 
-%% Returns:
+%% Returns: ETSTable
 %%--------------------------------------------------------------------
 handle_call({'get-ets-table'}, _From, State) ->
     [{?MODULE, Tab}] = ets:lookup('ETS-Table', ?MODULE),
     {reply, Tab, State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <put>
-%% Description(ja): ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
 handle_call({SelfKey, {put, Value}}, _From, State) ->
     F = fun([{_SelfKey, {_Value, MembershipVector, Neighbor}}]) ->
             {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
@@ -158,13 +148,7 @@ handle_call({SelfKey, {put, Value}}, _From, State) ->
     {reply, ok, State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <get>
-%% Description(ja): getメッセージを受信し、適当なローカルピア(無ければ
-%%                  グローバルピア)を選択して，get_process_0に繋げる．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% getメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，get_process_0に繋げる．
 handle_call({get, Key0, Key1},
     From,
     [InitialNode | Tail]) ->
@@ -199,12 +183,7 @@ handle_call({get, Key0, Key1},
     {noreply, [InitialNode | Tail]};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <get-process-0>
-%% Description(ja): 最適なピアを探索する．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% 最適なピアを探索する．
 handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
     _From,
     State) ->
@@ -270,12 +249,7 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
     {reply, '__none__', State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <get-process-1>
-%% Description(ja): 指定された範囲内を走査し，値を収集する．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% 指定された範囲内を走査し，値を収集する．
 handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}},
     _From,
     State) ->
@@ -317,13 +291,7 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}},
     {noreply, State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join>
-%% Description(ja): joinメッセージを受信し、適当なローカルピア(無ければ
-%%                  グローバルピア)を返す．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す．
 handle_call({join, _NewKey},
     From,
     [InitialNode | Tail]) ->
@@ -349,12 +317,7 @@ handle_call({join, _NewKey},
     {noreply, [InitialNode | Tail]};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join-process-0> [0]
-%% Description(ja): join-process-0にFromを渡して再度呼ぶ．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join-process-0にFromを渡して再度呼ぶ．
 handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Level},
     From,
     State) ->
@@ -372,12 +335,7 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Le
 
     {noreply, State};
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join-process-0> [1]
-%% Description(ja): join_process_0/3関数をlock_joinに与える
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join_process_0/3関数をlock_joinに与える
 handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
@@ -395,13 +353,8 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MembershipVector
     {noreply, State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join-process-1>
-%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
-%%                  join_process_1を，他の処理をlockして呼び出す．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% join_process_1を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
@@ -419,12 +372,7 @@ handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector
     {reply, '__none__', State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join-process-0-oneway> [0]
-%% Description(ja): join-process-0-onewayにFromを渡して再度呼び出す．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join-process-0-onewayにFromを渡して再度呼び出す．
 handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MembershipVector}}, Level},
     From,
     State) ->
@@ -442,12 +390,7 @@ handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MembershipVecto
 
     {noreply, State};
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join-process-0-oneway> [1]
-%% Description(ja): join_process_0_oneway/3関数をlock_joinに与える
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join_process_0_oneway/3関数をlock_joinに与える
 handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
@@ -465,13 +408,7 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, Membershi
     {noreply, State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join-process-1-oneway>
-%% Description(ja): join_process_1_oneway/3関数を呼び出す．ローカルから
-%%                  このコールバック関数を呼び出すことはほとんどない．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join_process_1_oneway/3関数を呼び出す．ローカルからこのコールバック関数を呼び出すことはほとんどない．
 handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, MembershipVector}}, Level},
     _From,
     State) ->
@@ -489,12 +426,7 @@ handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, Membershi
     {reply, '__none__', State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <join-process-2>
-%% Description(ja): ローカルで呼び出すことはない．Neighborをupdateする．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% ローカルで呼び出すことはない．Neighborをupdateする．
 handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     _From,
     State) ->
@@ -540,12 +472,7 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     {reply, '__none__', State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <remove-process-0> [0]
-%% Description(ja): remove-process-0にFromを渡して再度呼ぶ．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% remove-process-0にFromを渡して再度呼ぶ．
 handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level},
     From,
     State) ->
@@ -561,12 +488,7 @@ handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level},
 
     {noreply, State};
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <remove-process-0> [1]
-%% Description(ja): remove_process_0/3関数をlock_joinに与える
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% remove_process_0/3関数をlock_joinに与える
 handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level},
     _From,
     State) ->
@@ -582,12 +504,7 @@ handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level},
     {reply, '__none__', State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <remove-process-1> [0]
-%% Description(ja): remove-process-1にFromを渡して再度呼ぶ．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% remove-process-1にFromを渡して再度呼ぶ．
 handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level},
     From,
     State) ->
@@ -603,13 +520,8 @@ handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level},
 
     {noreply, State};
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <remove-process-1> [1]
-%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
-%%                  remove_process_1を，他の処理をlockして呼び出す．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% remove_process_1を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
     _From,
     State) ->
@@ -625,13 +537,8 @@ handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
     {reply, '__none__', State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <remove-process-2>
-%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
-%%                  remove_process_2を，他の処理をlockして呼び出す．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% remove_process_2を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Level},
     _From,
     State) ->
@@ -648,13 +555,8 @@ handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Lev
     {reply, '__none__', State};
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_call <remove-process-3>
-%% Description(ja): ネットワーク先ノードから呼び出されるために存在する．
-%%                  remove_process_3を，他の処理をlockして呼び出す．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% remove_process_3を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Level},
     _From,
     State) ->
@@ -678,12 +580,7 @@ handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Lev
     {reply, '__none__', State}.
 
 
-%%--------------------------------------------------------------------
-%% Function: terminate
-%% Description(ja): gen_server内でエラーが発生したとき，再起動させる．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% gen_server内でエラーが発生したとき，再起動させる．
 terminate(_Reason, State) ->
     spawn(fun() ->
                 test(),
@@ -693,32 +590,14 @@ terminate(_Reason, State) ->
     ok.
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_cast
-%% Description(ja): 何もしない
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
 handle_cast(_Message, State) ->
     {noreply, State}.
 
 
-%%--------------------------------------------------------------------
-%% Function: handle_info
-%% Description(ja): 何もしない
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
 handle_info(_Info, State) ->
     {noreply, State}.
 
 
-%%--------------------------------------------------------------------
-%% Function: code_change
-%% Description(ja): 何もしない
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
 code_change(_OldVsn, State, _NewVsn) ->
     {ok, State}.
 
@@ -728,17 +607,11 @@ code_change(_OldVsn, State, _NewVsn) ->
 %% join-process callbacks
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: join_process_0
-%% Description(ja): handle_call<join-process-0>から呼び出される．
-%%                  最もNewKeyに近いピアを(内側に向かって)探索する．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% handle_call<join-process-0>から呼び出される．
+%% 最もNewKeyに近いピアを(内側に向かって)探索する．
 join_process_0(SelfKey, {From, _Server, NewKey, _MembershipVector}, Level)
 when Level == 0 andalso SelfKey == NewKey ->
     gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}});
-
 
 join_process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level)
 when Level > 0 andalso SelfKey == NewKey ->
@@ -778,7 +651,6 @@ when Level > 0 andalso SelfKey == NewKey ->
                         end)
             end
     end;
-
 
 join_process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     case ets:lookup('Incomplete', SelfKey) of
@@ -912,14 +784,9 @@ join_process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: join_process_1
-%% Description(ja): join_process_0/3関数から呼び出される．
-%%                  MembershipVector[Level]が一致するピアを外側に向かって探索．
-%%                  成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join_process_0/3関数から呼び出される．
+%% MembershipVector[Level]が一致するピアを外側に向かって探索．
+%% 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
 join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     io:format("join_process_1: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
@@ -1119,17 +986,11 @@ join_process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: join_process_0_oneway
-%% Description(ja): join_process_0/3関数と同じだが，join_process_1_oneway/3関数を
-%%                  呼び出す
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join_process_0/3関数と同じだが，join_process_1_oneway/3関数を呼び出す
+
 join_process_0_oneway(SelfKey, {From, _Server, NewKey, _MembershipVector}, Level)
 when Level == 0 andalso SelfKey == NewKey ->
     gen_server:reply(From, {exist, {whereis(?MODULE), SelfKey}});
-
 
 join_process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level)
 when Level > 0 andalso SelfKey == NewKey ->
@@ -1169,7 +1030,6 @@ when Level > 0 andalso SelfKey == NewKey ->
                         end)
             end
     end;
-
 
 join_process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     case ets:lookup('Incomplete', SelfKey) of
@@ -1261,8 +1121,6 @@ join_process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
 
                         _ ->
                             % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
-                            %io:format("~nSelfKey=~p, NewKey=~p~nLevel=~p, S_or_B=~p~nNeighbor=~p~n", [SelfKey, NewKey, Level, S_or_B, Neighbor]),
-                            %io:format("Peer(NewKey)=~p~n", [ets:lookup('Peer', NewKey)]),
                             BestPeer = case ets:lookup('Incomplete', SelfKey) of
                                 [{SelfKey, {join, MaxLevel_}}] when (MaxLevel_ + 1) == Level ->
                                     select_best(lists:nthtail(MaxLevel_, Neighbor), NewKey, S_or_B);
@@ -1308,14 +1166,8 @@ join_process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: join_process_1_oneway
-%% Description(ja): join_process_0_oneway/3関数から呼び出される．
-%%                  基本はjoin_process_1/3関数と同じだが，片方向にしか
-%%                  探索しない．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% join_process_0_oneway/3関数から呼び出される．
+%% 基本はjoin_process_1/3関数と同じだが，片方向にしか探索しない．
 join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     io:format("join_process_1_oneway: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
@@ -1444,14 +1296,9 @@ join_process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) 
 %% remove-process callbacks
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: remove_process_0
-%% Description(ja): handle_call<remove-process-0>から呼び出される．
-%%                  RemovedKeyピアを探索．
-%%                  ほとんど使用しない．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% handle_call<remove-process-0>から呼び出される．
+%% RemovedKeyピアを探索．
+%% ただ，ほとんど使用しない．
 remove_process_0(SelfKey, {From, RemovedKey}, Level) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -1482,14 +1329,9 @@ remove_process_0(SelfKey, {From, RemovedKey}, Level) ->
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: remove_process_1
-%% Description(ja): handle_call<remove-process-1>から呼び出される．
-%%                  SelfKey == RemovedKey
-%%                  片方のNeighborにremove-process-2メッセージを送信．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% handle_call<remove-process-1>から呼び出される．
+%% このとき，SelfKey == RemovedKeyはtrue．
+%% 片方のNeighborにremove-process-2メッセージを送信．
 remove_process_1(SelfKey, {From, RemovedKey}, Level) ->
     io:format("Peer[SelfKey] = ~p~n", [ets:lookup('Peer', SelfKey)]),
 
@@ -1528,14 +1370,8 @@ remove_process_1(SelfKey, {From, RemovedKey}, Level) ->
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: remove_process_2
-%% Description(ja): handle_call<remove-process-2>から呼び出される．
-%%                  実際にremove処理を行い，NewNeighborにremove-process-3
-%%                  メッセージを送信．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% handle_call<remove-process-2>から呼び出される．
+%% 実際にremove処理を行い，NewNeighborにremove-process-3メッセージを送信．
 remove_process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -1576,13 +1412,7 @@ remove_process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
 %% Utilities (Transactions)
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: wait_trap
-%% Description(ja): {trap}を受信したら，PListに含まれる全プロセスに{ok, Ref}
-%%                  メッセージを送信する．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% {trap}を受信したら，PListに含まれる全プロセスに{ok, Ref}メッセージを送信する．
 wait_trap(PList) ->
     receive
         {add, {Pid, Ref}} ->
@@ -1607,12 +1437,7 @@ wait_trap(PList) ->
             wait_trapped({error, Message})
     end.
 
-%%--------------------------------------------------------------------
-%% Function: wait_trapped
-%% Description(ja): wait_trapが{trap}を受信した後の処理．
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% wait_trap/1関数が{trap}を受信した後の処理．
 wait_trapped(Receive) ->
     receive
         {add, {Pid, Ref}} ->
@@ -1627,13 +1452,18 @@ wait_trapped(Receive) ->
     wait_trapped(Receive).
 
 
-%%--------------------------------------------------------------------
-%% Function: lock_join
-%% Description(ja): 任意のキーに対してlock_daemonプロセスを生成し，
-%%                  ロックされた安全なjoinを行う
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+
+%% キー毎に独立したプロセスとして常駐する
+lock_daemon(F) ->
+    receive
+        Message ->
+            F(Message)
+    end,
+
+    lock_daemon(F).
+
+
+%% 任意のキーに対してlock_daemonプロセスを生成し，ロックされた安全なjoinを行う
 lock_join(Key, F) ->
     Ref = make_ref(),
 
@@ -1656,25 +1486,14 @@ lock_join(Key, F) ->
         {Ref, ok} -> ok
     end.
 
-
-%%--------------------------------------------------------------------
-%% Function: lock_join_callback
-%% Description(ja): lock_daemon用のコールバック関数．安全なjoinを行う
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% lock_daemon用のコールバック関数．安全なjoinを行う
 lock_join_callback({{From, Ref}, {update, F}}) ->
     F(),
     From ! {Ref, ok}.
 
 
-%%--------------------------------------------------------------------
-%% Function: lock_update
-%% Description(ja): 任意のキーに対してlock_daemonプロセスを生成し，
-%%                  ロックされた安全なupdateを行う
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% 任意のキーに対してlock_daemonプロセスを生成し，ロックされた安全なupdateを行う
+
 lock_update(Key, F) ->
     lock_update('Peer', Key, F).
 
@@ -1700,13 +1519,9 @@ lock_update(Table, Key, F) ->
         {Ref, Result} -> Result
     end.
 
-
-%%--------------------------------------------------------------------
-%% Function: lock_update_callback
-%% Description(ja): lock_daemon用のコールバック関数．ETSテーブルを安全に更新する
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
+%% lock_daemon用のコールバック関数．
+%% lock_update関数によって関連づけられる．
+%% ETSテーブルを安全に更新する
 lock_update_callback({{From, Ref}, {update, Table, {Key, F}}}) ->
     Item = ets:lookup(Table, Key),
 
@@ -1727,27 +1542,7 @@ lock_update_callback({{From, Ref}, {update, Table, {Key, F}}}) ->
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: lock_daemon
-%% Description(ja): キー毎に独立したプロセスとして常駐する
-%% Description(en): 
-%% Returns:
-%%--------------------------------------------------------------------
-lock_daemon(F) ->
-    receive
-        Message ->
-            F(Message)
-    end,
-
-    lock_daemon(F).
-
-
-%%--------------------------------------------------------------------
-%% Function: update
-%% Description(ja): Neighbor[Level]を更新する
-%% Description(en): update Neighbor[Level]
-%% Returns:
-%%--------------------------------------------------------------------
+%% lock_updateを利用してNeighbor[Level]を更新する
 update(SelfKey, {Server, NewKey}, Level) ->
     F = fun([{_, {Value, MembershipVector, {Smaller, Bigger}}}]) ->
             io:format("NewKey=~p  SelfKey=~p~n", [NewKey, SelfKey]),
@@ -1786,12 +1581,8 @@ update(SelfKey, {Server, NewKey}, Level) ->
 %% Utilities (Other)
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: select_best
-%% Description(ja): Neighborの中から最適なピアを選択する
-%% Description(en): select the best peer from a neighbor
-%% Returns: {'__none__', '__none__'} | {'__self__'} | {Node, Key}
-%%--------------------------------------------------------------------
+%% Neighborの中から最適なピアを選択する
+
 select_best([], _, _) ->
     {'__none__', '__none__'};
 select_best([{'__none__', '__none__'} | _], _, _) ->
@@ -1856,12 +1647,8 @@ when S_or_B == bigger ->
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: make_membership_vector
-%% Description(ja): MembershipVectorを生成する
-%% Description(en): make membership vector
-%% Returns: <<1:1, N:1, M:1, ...>>
-%%--------------------------------------------------------------------
+%% MembershipVectorを生成する
+
 make_membership_vector() ->
     {A1, A2, A3} = now(),
     random:seed(A1, A2, A3),
@@ -1886,12 +1673,8 @@ make_membership_vector(Bin, N) ->
 %% Interfaces
 %%====================================================================
 
-%%--------------------------------------------------------------------
-%% Function: join
-%% Description(ja): 新しいピアをjoinする
-%% Description(en): join a new peer
-%% Returns: ok | {error, Reason}
-%%--------------------------------------------------------------------
+%% 新しいピアをjoinする
+
 join(Key) ->
     join(Key, '__none__').
 
@@ -2134,14 +1917,8 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
     end.
 
 
-%%--------------------------------------------------------------------
-%% Function: join_oneway
-%% Description(ja): 一方のNeighborが'__none__'のとき，もう一方のNeighborを
-%%                  通して新たなピアをjoinする
-%% Description(en): when a neighbor is '__none__', this function join a
-%%                  new peer through only an another
-%% Returns: ok | {error, Reason}
-%%--------------------------------------------------------------------
+%% 一方のNeighborが'__none__'のとき，もう一方のNeighborを通して新たなピアをjoinする
+
 join_oneway(_, Key, _, _, _, 10) ->
     F = fun(Item) ->
             case Item of
@@ -2291,7 +2068,6 @@ remove(Key) ->
 
     remove(Key, ?LEVEL_MAX - 1).
 
-
 remove(Key, -1) ->
     ets:delete('Peer', Key);
 remove(Key, Level) ->
@@ -2342,32 +2118,14 @@ get(Key0, Key1) ->
     gen_server:call(?MODULE, {get, Key0, Key1}).
 
 
-%%--------------------------------------------------------------------
-%% Function: test
-%% Description(ja): システムが持つ全てのピア情報を示す
-%% Description(en): show all peers which the system has
-%% Returns:
-%%--------------------------------------------------------------------
 test() ->
     io:format("~nPeers = ~p~n", [ets:tab2list('Peer')]).
 
 
-%%--------------------------------------------------------------------
-%% Function: get_server
-%% Description(ja): サーバのpidを返す
-%% Description(en): return pid of server
-%% Returns: pid()
-%%--------------------------------------------------------------------
 get_server() ->
     whereis(?MODULE).
 
 
-%%--------------------------------------------------------------------
-%% Function: get_peer
-%% Description(ja): すべてのピアを返す
-%% Description(en): return pid of server
-%% Returns: pid()
-%%--------------------------------------------------------------------
 get_peer() ->
     ets:tab2list('Peer').
 
