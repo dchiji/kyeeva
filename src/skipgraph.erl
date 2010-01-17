@@ -1,4 +1,4 @@
-%%    Copyright 2009  CHIJIWA Daiki <daiki41@gmail.com>
+%%    Copyright 2009~2010  CHIJIWA Daiki <daiki41@gmail.com>
 %%    
 %%    Redistribution and use in source and binary forms, with or without
 %%    modification, are permitted provided that the following conditions
