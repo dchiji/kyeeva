@@ -15,7 +15,7 @@ int stack_init(const char *pathname, unsigned int size, stack_header_t **p)
         FILE *fp;
 
         if((fp = fopen(pathname, "r")) == NULL) {
-            printf("[libshmsl/stack_init]: Identification file <%s> is not found\n", pathname);
+            printf("[libshmsl/stack_init/fopen]: Identification file <%s> is not found\n", pathname);
             return -1;
         } else {
             fclose(fp);
@@ -113,3 +113,4 @@ int stack_delete(stack_header_t *header, int id)
 
     return 1;
 }
+
