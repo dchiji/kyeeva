@@ -4,6 +4,8 @@
 typedef struct skiplist {
     unsigned int key;    // 3bytes: offset of datablock, 1byte: number of blocks
     unsigned int value;    // 3bytes: offset of datablock, 1byte: number of blocks
+    unsigned int neighbor_smaller;    // 3bytes: offset of datablock, 1byte: number of blocks
+    unsigned int neighbor_bigger;    // 3bytes: offset of datablock, 1byte: number of blocks
 
     unsigned int smaller[8];
     unsigned int bigger[8];
