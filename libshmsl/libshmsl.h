@@ -1,21 +1,18 @@
 #ifndef __LIBSHMSL_H__
 #define __LIBSHMSL_H__
 
-typedef struct neighbor {
-    unsigned int offset;
-    unsigned int key;    // 3bytes: offset of datablock, 1byte: number of blocks
-} neighbor_t;
+#define BLOCK_SIZE 24
 
 typedef struct skiplist {
+    unsigned int membership_vector;
+
     unsigned int key;    // 3bytes: offset of datablock, 1byte: number of blocks
     unsigned int value;    // 3bytes: offset of datablock, 1byte: number of blocks
 
-    unsigned int membership_vector;
-
     unsigned int global_smaller;    // 3bytes: offset of datablock, 1byte: number of blocks
     unsigned int global_bigger;    // 3bytes: offset of datablock, 1byte: number of blocks
-    neighbor_t local_smaller[8];
-    neighbor_t local_bigger[8];
+    unsigned int local_smaller[8];    // 3bytes: offset of datablock, 1byte: number of blocks
+    unsigned int local_bigger[8];    // 3bytes: offset of datablock, 1byte: number of blocks
 } skiplist_t;
 
 typedef struct block_header {
@@ -38,5 +35,11 @@ typedef struct shmsl {
     block_header_t *skiplist;
     block_header_t *datablock;
 } shmsl_t;
+
+shmsl_t *shmsl_init(char *id_pathname, unsigned int skiplist_size, unsigned int datablock_size);
+int shmsl_delete(shmsl_t *info);
+unsigned char *shmsl_get(shmsl_t *info, const unsigned char *key);
+int strcmp_with_diff(char *str1, char *str2, unsigned int str1_size, unsigned int str2_size);
+skiplist_t *select_best(unsigned char *data_block, unsigned int *neighbor, unsigned char *key, unsigned int neighbor_n, unsigned int key_size);
 
 #endif
