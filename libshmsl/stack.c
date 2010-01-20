@@ -2,7 +2,6 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 #include <sys/stat.h>
-#include <error.h>
 #include "stack.h"
 
 int stack_init(const char *pathname, unsigned int size, stack_header_t **p)
