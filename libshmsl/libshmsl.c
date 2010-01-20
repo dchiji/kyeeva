@@ -89,3 +89,27 @@ int shmsl_delete(shmsl_t *info)
 
     return 1;
 }
+
+unsigned char *shmsl_get(shmsl_t *info, unsigned char *key)
+{
+    unsigned char *node;
+    unsigned char *p;
+
+    if(info == NULL) {
+        printf("[libshmsl/shmsl_get]: Invalid argument\n");
+        return NULL;
+    }
+
+    if(info->skiplist == NULL) {
+        if((sl_header = shmat(info->skiplist_id, 0, 0)) == -1) {
+            perror("[libshmsl/shmsl_init/shmat]");
+            return NULL;
+        }
+        info->skiplist = shmat(info->skiplist_id, 0, 0);
+    }
+
+    node = info->skiplist->blocks;
+
+    while(node != NULL) {
+    }
+}
