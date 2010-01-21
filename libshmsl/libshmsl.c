@@ -107,6 +107,14 @@ unsigned char *shmsl_get(shmsl_t *info, const unsigned char *key)
         info->skiplist = shmat(info->skiplist_id, 0, 0);
     }
 
+    if(info->datablock == NULL) {
+        if((db_header = shmat(info->datablock_id, 0, 0)) == -1) {
+            perror("[libshmsl/shmsl_init/shmat]");
+            return NULL;
+        }
+        info->datablock = shmat(info->datablock_id, 0, 0);
+    }
+
     node = info->skiplist->blocks;
 
     while(node != NULL) {
@@ -133,9 +141,9 @@ unsigned char *shmsl_get(shmsl_t *info, const unsigned char *key)
         }
 
         if(result == key_size || key[result] < data[result]){
-            node = select_best(node->local_smaller, key, LOCAL_NEIGHBOR_N, key_size);
+            node = select_best(info->datablock, node->local_smaller, key, LOCAL_NEIGHBOR_N, key_size, 'S');
         } else if(key[result] > data[result]) {
-            node = select_best(node->local_bigger, key, LOCAL_NEIGHBOR_N, key_size);
+            node = select_best(info->skiplist->blocks, info->datablock->blocks, node->local_bigger, key, LOCAL_NEIGHBOR_N, key_size, 'B');
         }
     }
 }
@@ -146,18 +154,18 @@ int strcmp_with_diff(char *str1, char *str2, unsigned int str1_size, unsigned in
     int i;
     int j;
 
-    for(i = 0; i < max; i += 4) {
-        if(max - i < 4) {
-            for(j = 0; j + i < max; j++) {
-                if(str1[i + j] != str[i + j]) {
-                    return i + j;
+    for(i = 0; i < max; i++) {
+        if(max - i < sizeof(int)) {
+            for(j = 0; i * sizeof(int) + j < max; j++) {
+                if(str1[i * sizeof(int) + j] != str[i + j]) {
+                    return i * sizeof(int) + j;
                 }
             }
         } else {
-            if(*((int *)str1 + i / 4) != *((int *)str + i / 4)) {
-                for(j = 0; j < 4; j++) {
-                    if(str1[i + j] != str[i + j]) {
-                        return i + j;
+            if(*((int *)str1 + i) != *((int *)str + i)) {
+                for(j = 0; j < sizeof(int); j++) {
+                    if(str1[i * sizeof(int) + j] != str[i * sizeof(int) + j]) {
+                        return i * sizeof(int) + j;
                     }
                 }
             }
@@ -171,13 +179,35 @@ int strcmp_with_diff(char *str1, char *str2, unsigned int str1_size, unsigned in
     }
 }
 
-skiplist_t *select_best(unsigned char *data_block, unsigned int *neighbor, unsigned char *key, unsigned int neighbor_n, unsigned int key_size)
+skiplist_t *select_best(skiplist_t *sl_blocks, unsigned char *db_blocks, unsigned int *neighbor, unsigned char *key, unsigned int neighbor_n, unsigned int key_size, char S_or_B)
 {
+    skiplist_t *prev_node = NULL;
+    int prev_result;
+
     int i;
 
     for(i = 0; i < neighbor_n; i++) {
-        unsigned int offset = neighbor[i] >> (sizeof(int) / 4);
-        unsigned int block_n = (neighbor[i] << (sizeof(int) * 3 / 4)) >> (sizeof(int) * 3 / 4);
+        unsigned int offset = neighbor[i] >> 8;
+        unsigned int block_n = (neighbor[i] << (sizeof(int) * 8 - 8)) >> (sizeof(int) * 8 - 8);
 
+        unsigned int neighbor_key_size = *(int *)(datablock + offset * BLOCK_SIZE);
+        unsigned int sl_node_offset = *((int *)(datablock + offset * BLOCK_SIZE) + 1);
+        unsigned char *neighbor_key = datablock + offset * BLOCK_SIZE + sizeof(int) * 2;
+
+        int result = strcmp_with_diff(neighbor_key, key, neighbor_key_size, key_size);
+
+        if(result == -1) {
+            return sl_blocks + sl_node_offset;
+        } else if(S_or_B == 'B' &&
+                prev_result > result &&
+                key[result] < neighbor_key[result]) {
+            return prev_node;
+        } else if(S_or_B == 'S' &&
+                prev_result < result &&
+                key[result] > neighbor_key[result]) {
+            return prev_node;
+        }
     }
+
+    return sl_blocks + sl_node_offset;
 }
