@@ -1,11 +1,20 @@
+/*
+ * TODO:
+ *     shmsl_putの実装
+ *     shmsl_deleteの実装
+ *     shmsl_delete, shmsl_put, shmsl_getをbusy_flagに対応させる
+ *     deleted_flag
+ */
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/ipc.h>
 
 #include "libshmsl.h"
 #include "stack.h"
 
-shmsl_t *shmsl_init(char *id_pathname, unsigned int skiplist_size, unsigned int datablock_size)
+shmsl_t *shmsl_init(char *pathname, unsigned int skiplist_size, unsigned int datablock_size)
 {
     key_t skiplist_key;
     key_t datablock_key;
@@ -20,7 +29,7 @@ shmsl_t *shmsl_init(char *id_pathname, unsigned int skiplist_size, unsigned int 
         FILE *fp;
 
         if((fp = fopen(pathname, "r")) == NULL) {
-            printf("[libshmsl/shmsl_init/fopen]: identification file <%s> is not found.\n", id_pathname);
+            printf("[libshmsl/shmsl_init/fopen]: identification file <%s> is not found.\n", pathname);
             return NULL;
         } else {
             fclose(fp);
@@ -39,13 +48,14 @@ shmsl_t *shmsl_init(char *id_pathname, unsigned int skiplist_size, unsigned int 
         return NULL;
     }
 
-    if((info->skiplist = shmat(info->skiplist_id, 0, 0)) == -1) {
+    if((signed int)(info->skiplist = (block_header_t *)shmat(info->skiplist_id, 0, 0)) == -1) {
         perror("[libshmsl/shmsl_init/shmat]");
         return NULL;
     }
     if((info->skiplist->unused_stack_id = stack_init(pathname, skiplist_size, NULL)) == -1) {
         return NULL;
     }
+    info->skiplist_size    = skiplist_size;
     info->skiplist->size    = skiplist_size;
     info->skiplist->tail    = 0;
     info->skiplist->self_id = info->skiplist_id;
@@ -56,20 +66,21 @@ shmsl_t *shmsl_init(char *id_pathname, unsigned int skiplist_size, unsigned int 
         return NULL;
     }
     info->datablock_id = shmget(datablock_key,
-                                sizeof(block_header_t) + sizeof(datablock_t) * datablock_size,
+                                sizeof(block_header_t) + BLOCK_SIZE * datablock_size,
                                 IPC_CREAT);
     if(info->datablock_id == -1) {
         perror("[libshmsl/shmsl_init/shmget]");
         return NULL;
     }
 
-    if((info->datablock = shmat(info->datablock_id, 0, 0)) == -1) {
+    if((int)(info->datablock = (block_header_t *)shmat(info->datablock_id, 0, 0)) == -1) {
         perror("[libshmsl/shmsl_init/shmat]");
         return NULL;
     }
     if((info->datablock->unused_stack_id = stack_init(pathname, datablock_size, NULL)) == -1) {
         return NULL;
     }
+    info->datablock_size    = datablock_size;
     info->datablock->size    = datablock_size;
     info->datablock->tail    = 0;
     info->datablock->self_id = info->datablock_id;
@@ -78,7 +89,7 @@ shmsl_t *shmsl_init(char *id_pathname, unsigned int skiplist_size, unsigned int 
     return info;
 }
 
-int shmsl_delete(shmsl_t *info)
+int shmsl_free(shmsl_t *info)
 {
     shmdt(info->skiplist);
     shmdt(info->datablock);
@@ -90,65 +101,201 @@ int shmsl_delete(shmsl_t *info)
     return 1;
 }
 
-unsigned char *shmsl_get(shmsl_t *info, const unsigned char *key)
+int shmsl_put(shmsl_t *info, unsigned char *key, unsigned char *value, unsigned int key_size, unsigned int value_size)
 {
-    unsigned char *node;
+    unsigned int tail;
+    unsigned char *key_db_ptr;
+    unsigned char *value_db_ptr;
+    skiplist_t *new_node;
+
+    for(tail = info->tail; !__sync_bool_compare_and_swap(&info->tail, tail, tail + sizeof(skiplist_t)); tail = info->tail);
+    new_node = info_block + tail;
+
+    info->membership_vector = G_MEMBERSHIP_VECTOR;
+    if((key_db_ptr = datablock_put(info->datablock->blocks + new_node->key, key, key_size)) == NULL) {
+        return 0;
+    }
+    if((value_db_ptr = datablock_put(info->datablock->blocks + new_node->key, value, value_size)) == NULL) {
+        return 0;
+    }
+
+    if(tail == 0) {
+        new_node->canuse_neighbor_smaller = LOCAL_NEIGHBOR_N;
+        new_node->canuse_neighbor_bigger = LOCAL_NEIGHBOR_N;
+        new_node->nobusy_flag = 1;
+    } else {
+        unsigned int level; 
+        skiplist_t *node;
+        unsigned char *node_key;
+        unsigned int node_key_size;
+        int cmp_result;
+
+        skiplist_t *smaller;
+        skiplist_t *bigger;
+
+        node = shmsl_get(info, key, key_size);
+        node_key = shmsl_key(node, &node_key_size);
+
+        cmp_result = strcmp_with_diff(node_key, key, node_key_size, key_size);
+
+        if(result == -1) {
+            datablock_put(datablock + node->value, value, value_size);
+        } else if (node_key[cmp_result] < key[cmp_result]) {
+            bigger = new_node->local_smaller[0]->local_bigger[0];
+
+            for(level = 0; level < LOCAL_NEIGHBOR_N; level++) {
+                node = seek_next_neighbor(node, membership_vector, level, 'S');
+
+                new_node->local_smaller[level] = node;
+                new_node->local_bigger[level] = node->local_bigger[level];
+
+                node->local_bigger[level] = new_node;
+            }
+        } else {
+            smaller = new_node->local_bigger[0]->local_smaller[0];
+
+            for(level = 0; level < LOCAL_NEIGHBOR_N; level++) {
+                node = seek_next_neighbor(node, membership_vector, level, 'B');
+
+                new_node->local_bigger[level] = node;
+                new_node->local_smaller[level] = node->local_smaller[level];
+
+                node->local_smaller[level] = new_node;
+            }
+        }
+    }
+    return new_node;
+}
+
+unsigned char *shmsl_key(block_header_t *datablock, skiplist_t *node, int new_alloc_flag, int *key_size_ptr)
+{
+    unsigned char *data;
+    unsigned int key_size;
+
+    data = datablock->blocks + node->key;
+    key_size = *data;
+    key = data + sizeof(int);
+
+    if(key_size_ptr != NULL) {
+        *key_size_ptr = key_size;
+    }
+
+    if(new_alloc_flag) {
+        unsigned char *p = (unsigned char *)malloc(sizeof(char) * key_size);
+
+        if(p == NULL) {
+            printf("[libshmsl/shmsl_key/malloc]: Failed memory allocation\n");
+            return NULL;
+        }
+
+        return memcpy(p, key, key_size);
+    }
+
+    return key;
+}
+
+unsigned char *shmsl_value(block_header_t *datablock, skiplist_t *node, int new_alloc_flag, int *value_size_ptr)
+{
+    unsigned int offset;
+    unsigned char *data;
+    unsigned char *value;
+    unsigned int value_size;
+
+    offset     = node->value >> (sizeof(int) / 4);
+    data       = datablock->blocks + offset;
+    value_size = *data;
+    value      = data + sizeof(int);
+
+    if(value_size_ptr != NULL) {
+        *value_size_ptr = value_size;
+    }
+
+    if(new_alloc_flag) {
+        unsigned char *p = (unsigned char *)malloc(data_size);
+
+        if(p == NULL) {
+            printf("[libshmsl/shmsl_value/malloc]: Failed memory allocation\n");
+            return NULL;
+        }
+
+        return memcpy(p, node->key, sizeof(char) * BLOCK_SIZE * block_n);
+    } else {
+        return value;
+    }
+}
+
+skiplist_t *shmsl_get(shmsl_t *info, unsigned char *key, unsigned int key_size)
+{
+    skiplist_t *node;
 
     if(info == NULL) {
         printf("[libshmsl/shmsl_get]: Invalid argument\n");
         return NULL;
     }
 
+    if(info->tail == 0) {
+        printf("[libshmsl/shmsl_get]: Skip List is empty");
+        return NULL;
+    }
+
     if(info->skiplist == NULL) {
-        if((sl_header = shmat(info->skiplist_id, 0, 0)) == -1) {
+        if((int)(info->skiplist = (block_header_t *)shmat(info->skiplist_id, 0, 0)) == -1) {
             perror("[libshmsl/shmsl_init/shmat]");
             return NULL;
         }
-        info->skiplist = shmat(info->skiplist_id, 0, 0);
     }
 
     if(info->datablock == NULL) {
-        if((db_header = shmat(info->datablock_id, 0, 0)) == -1) {
+        if((int)(info->datablock = (block_header_t *)shmat(info->datablock_id, 0, 0)) == -1) {
             perror("[libshmsl/shmsl_init/shmat]");
             return NULL;
         }
-        info->datablock = shmat(info->datablock_id, 0, 0);
     }
 
-    node = info->skiplist->blocks;
+    node = (skiplist_t *)info->skiplist->blocks;
 
     while(node != NULL) {
-        unsigned int offset    = node->key >> (sizeof(int) / 4);
-        unsigned int block_n   = (node->key << (sizeof(int) * 3 / 4)) >> (sizeof(int) * 3 / 4);
-        unsigned char *block   = datablock_get(offset, block_n);
+        unsigned int offset;
+        unsigned int block_n;
+        unsigned char *block;
 
-        unsigned int key_size  = strlen(key);
-        unsigned int data_size = *(int *)block;
-        unsigned char *data    = block + sizeof(int);
+        unsigned int data_size;
+        unsigned char *data;
 
-        int result             = strcmp_with_diff(data, key, data_size, key_size);
+        int result;
 
-        if(result == -1) {
-            unsigned char *p = malloc(data_size);
+        offset    = node->key >> (sizeof(int) / 4);
+        block_n   = (node->key << (sizeof(int) * 3 / 4)) >> (sizeof(int) * 3 / 4);
+        block     = info->datablock->blocks + offset;
 
-            if(p == NULL) {
-                printf("[libshmsl/shmsl_init/malloc]: Failed memory allocation\n");
-                return NULL;
-            }
+        data_size = *(int *)block;
+        data      = block + sizeof(int);
 
-            memcpy(p, data, sizeof(char) * BLOCK_SIZE * block_n);
-            return p;
-        }
+        result    = strcmp_with_diff(data, key, data_size, key_size);
 
         if(result == key_size || key[result] < data[result]){
-            node = select_best(info->datablock, node->local_smaller, key, LOCAL_NEIGHBOR_N, key_size, 'S');
+            node = select_best((skiplist_t *)info->skiplist->blocks,
+                               info->datablock->blocks,
+                               node->local_smaller,
+                               key,
+                               LOCAL_NEIGHBOR_N,
+                               key_size,
+                               'S');
         } else if(key[result] > data[result]) {
-            node = select_best(info->skiplist->blocks, info->datablock->blocks, node->local_bigger, key, LOCAL_NEIGHBOR_N, key_size, 'B');
+            node = select_best((skiplist_t *)info->skiplist->blocks,
+                               info->datablock->blocks,
+                               node->local_bigger,
+                               key,
+                               LOCAL_NEIGHBOR_N,
+                               key_size,
+                               'B');
         }
     }
+
+    return node;
 }
 
-int strcmp_with_diff(char *str1, char *str2, unsigned int str1_size, unsigned int str2_size)
+int strcmp_with_diff(unsigned char *str1, unsigned char *str2, unsigned int str1_size, unsigned int str2_size)
 {
     int max = (str1_size < str2_size)?str1_size:str2_size;
     int i;
@@ -157,14 +304,14 @@ int strcmp_with_diff(char *str1, char *str2, unsigned int str1_size, unsigned in
     for(i = 0; i < max; i++) {
         if(max - i < sizeof(int)) {
             for(j = 0; i * sizeof(int) + j < max; j++) {
-                if(str1[i * sizeof(int) + j] != str[i + j]) {
+                if(str1[i * sizeof(int) + j] != str2[i + j]) {
                     return i * sizeof(int) + j;
                 }
             }
         } else {
-            if(*((int *)str1 + i) != *((int *)str + i)) {
+            if(*((int *)str1 + i) != *((int *)str2 + i)) {
                 for(j = 0; j < sizeof(int); j++) {
-                    if(str1[i * sizeof(int) + j] != str[i * sizeof(int) + j]) {
+                    if(str1[i * sizeof(int) + j] != str2[i * sizeof(int) + j]) {
                         return i * sizeof(int) + j;
                     }
                 }
@@ -187,14 +334,28 @@ skiplist_t *select_best(skiplist_t *sl_blocks, unsigned char *db_blocks, unsigne
     int i;
 
     for(i = 0; i < neighbor_n; i++) {
-        unsigned int offset = neighbor[i] >> 8;
-        unsigned int block_n = (neighbor[i] << (sizeof(int) * 8 - 8)) >> (sizeof(int) * 8 - 8);
+        unsigned int sl_offset;
+        skiplist_t *sl_node;
 
-        unsigned int neighbor_key_size = *(int *)(datablock + offset * BLOCK_SIZE);
-        unsigned int sl_node_offset = *((int *)(datablock + offset * BLOCK_SIZE) + 1);
-        unsigned char *neighbor_key = datablock + offset * BLOCK_SIZE + sizeof(int) * 2;
+        unsigned int db_offset;
+        unsigned int db_block_n;
 
-        int result = strcmp_with_diff(neighbor_key, key, neighbor_key_size, key_size);
+        unsigned int neighbor_key_size;
+        int sl_node_offset;
+        unsigned char *neighbor_key;
+
+        int result;
+
+        sl_offset = neighbor[i];
+        sl_node = sl_blocks + sl_offset;
+
+        db_offset = sl_node->key >> 8;
+        db_block_n = (sl_node->key << (sizeof(int) * 8 - 8)) >> (sizeof(int) * 8 - 8);
+
+        neighbor_key_size = *(int *)(db_blocks + db_offset * BLOCK_SIZE);
+        neighbor_key = db_blocks + db_offset * BLOCK_SIZE + sizeof(int);
+
+        result = strcmp_with_diff(neighbor_key, key, neighbor_key_size, key_size);
 
         if(result == -1) {
             return sl_blocks + sl_node_offset;
@@ -207,7 +368,14 @@ skiplist_t *select_best(skiplist_t *sl_blocks, unsigned char *db_blocks, unsigne
                 key[result] > neighbor_key[result]) {
             return prev_node;
         }
+
+        prev_node = sl_node;
     }
 
-    return sl_blocks + sl_node_offset;
+    return prev_node;
 }
+
+datablock_put()
+{
+}
+
