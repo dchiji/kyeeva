@@ -1,0 +1,10 @@
+datablock
+    HEADER : sizeof(block_header_t)=20bytes;
+    BLOCKS : HEADER->size;
+        SIZE : 4bytes
+        DATA : SIZE
+
+skiplist
+    HEADER : sizeof(block_header_t)=20bytes
+    BLOCKS : HEADER->size
+        DATA : skiplist_t
