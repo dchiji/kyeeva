@@ -1692,8 +1692,7 @@ join(Key, Value) ->
             Neighbor = {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
                 lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
 
-            case gen_server:call(whereis(?MODULE), {join, Key}) of
-                {ok, {'__none__', '__none__'}} ->
+            InitTables = fun() ->
                     ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
                     ets:insert('Lock-Join-Daemon',
                         {Key,
@@ -1704,26 +1703,42 @@ join(Key, Value) ->
                         {Key,
                             spawn(fun() ->
                                         lock_daemon(fun lock_update_callback/1)
-                                end)});
+                                end)})
+            end,
+
+            case gen_server:call(whereis(?MODULE), {join, Key}) of
+                {ok, {'__none__', '__none__'}} ->
+                    InitTables();
 
                 {ok, InitPeer} ->
                     ets:insert('Incomplete', {Key, {{join, -1}, {remove, ?LEVEL_MAX}}}),
-                    ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
-                    ets:insert('Lock-Join-Daemon',
-                        {Key,
-                            spawn(fun() ->
-                                        lock_daemon(fun lock_join_callback/1)
-                                end)}),
-                    ets:insert('Lock-Update-Daemon',
-                        {Key,
-                            spawn(fun() ->
-                                        lock_daemon(fun lock_update_callback/1)
-                                end)}),
+                    InitTables(),
 
                     join(InitPeer, Key, Value, MembershipVector)
             end
     end,
     ok.
+
+
+join_delete_if_exist(Node, Key, Value, TableList) ->
+    Self = whereis(?MODULE),
+
+    case Node of
+        Self ->
+            case ets:lookup('Incomplete', Key) of
+                [{Key, {{join, -1}, {remove, _}}}] ->
+                    ets:delete('Incomplete', Key),
+                    gen_server:call(Node, {Key, {put, Value}});
+                [{Key, _}] ->
+                    gen_server:call(Node, {Key, {put, Value}})
+            end;
+        _ ->
+            lists:foreach(fun(Table) ->
+                        ets:delete(Table, Key)
+                end,
+                TableList),
+            gen_server:call(Node, {Key, {put, Value}})
+    end.
 
 
 join(InitPeer, Key, Value, MembershipVector) ->
@@ -1773,25 +1788,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
     case Result of
         % 既に存在していた場合，そのピアにValueが上書きされる
         {exist, {Node, Key}} ->
-            Self = whereis(?MODULE),
-
-            case Node of
-                Self ->
-                    case ets:lookup('Incomplete', Key) of
-                        [{Key, -1}] ->
-                            ets:delete('Incomplete', Key),
-                            gen_server:call(Node, {Key, {put, Value}});
-                        [{Key, _}] ->
-                            gen_server:call(Node, {Key, {put, Value}})
-                    end;
-                _ ->
-                    ets:delete('Incomplete', Key),
-                    ets:delete('Lock-Join-Daemon', Key),
-                    ets:delete('Lock-Update-Daemon', Key),
-                    ets:delete('Peer', Key),
-                    gen_server:call(Node, {Key, {put, Value}})
-            end,
-            ok;
+            join_delete_if_exist(Node, Key, Value, ['Incomplete', 'Lock-Join-Daemon', 'Lock-Update-Daemon', 'Peer']);
 
         {ok, {{'__none__', '__none__'}, {'__none__', '__none__'}}, _} ->
             F = fun(Item) ->
@@ -1963,23 +1960,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
 
     case Result of
         {exist, {Node, Key}} ->
-            Self = whereis(?MODULE),
-
-            case Node of
-                Self ->
-                    case ets:lookup('Incomplete', Key) of
-                        [{Key, {join, -1}}] ->
-                            ets:delete('Incomplete', Key),
-                            gen_server:call(Node, {Key, {put, Value}});
-                        [{Key, {join, _}}] ->
-                            gen_server:call(Node, {Key, {put, Value}})
-                    end;
-                _ ->
-                    ets:delete('Peer', Key),
-                    ets:delete('Incomplete', Key),
-                    gen_server:call(Node, {Key, {put, Value}})
-            end,
-            ok;
+            join_delete_if_exist(Node, Key, Value, ['Peer', 'Incomplete']);
 
         {ok, {'__none__', '__none__'}, _} ->
             F = fun(Item) ->
