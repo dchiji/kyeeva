@@ -403,7 +403,7 @@ skiplist_t *select_best(skiplist_t *sl_blocks, unsigned char *db_blocks, unsigne
     return prev_node;
 }
 
-datablock_put()
+unsigned char *datablock_put(unsigned char *p, unsigned char *new_data, unsigned int new_data_size)
 {
 }
 
