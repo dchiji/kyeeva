@@ -30,7 +30,7 @@
 %%      * join中にサーバが再起動した場合の処理
 %%      * get時に死んだノードを発見した場合の処理
 %%
-%%      * lock_update, join, join-process, get, get-process, remove
+%%      * join, join-process, get, get-process, remove
 
 -module(skipgraph).
 -behaviour(gen_server).
@@ -97,8 +97,8 @@ start(Initial) ->
 
 %% gen_server:start_linkにより呼び出される．
 init(Arg) ->
-    % [{UniqueKey, {Type, Value1, MembershipVector, Neighbor}},
-    %  {UniqueKey, {Type, Value2, ...}},
+    % [{{UniqueKey, Type}, Value1, MembershipVector, Neighbor}},
+    %  {{UniqueKey, Type}, Value2, ...}},
     %  ...]
     %
     %   Type: atom()
@@ -106,8 +106,9 @@ init(Arg) ->
     %   Neighbor: {Smaller, Bigger}
     %     Smaller: [{Node, Key}, ...]
     %     Smaller: [{Node, Key}, ...]
-    T = ets:new('Peer', [bag, public, named_table]),
+    T = ets:new('Peer', [set, public, named_table]),
 
+    ets:new('Types', [set, public, named_table]),
     ets:new('Lock-Update-Daemon', [set, public, named_table]),
     ets:new('Lock-Join-Daemon', [set, public, named_table]),
     ets:new('Joining-Wait', [set, public, named_table]),
@@ -145,12 +146,12 @@ handle_call({'get-ets-table'}, _From, State) ->
 
 
 %% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
-handle_call({UniqueKey, {put, {Type, Value}}}, _From, State) ->
-    F = fun([{UniqueKey, {Type, _Value, MembershipVector, Neighbor}}]) ->
-            {ok, {UniqueKey, {Type, Value, MembershipVector, Neighbor}}}
+handle_call({{Type, Value}, {put, UniqueKey}}, _From, State) ->
+    F = fun([{{Type, Value}, {UniqueList, MembershipVector, Neighbor}}]) ->
+            {ok, {{Tree, Value}, {[UniqueKey | UniqueList], MembershipVector, Neighbor}}}
     end,
 
-    lock_update(UniqueKey, Type, F),
+    lock_update({Type, Value}, F),
     {reply, ok, State};
 
 
@@ -1500,8 +1501,8 @@ lock_join_callback({{From, Ref}, {update, F}}) ->
 
 %% 任意のキーに対してlock_daemonプロセスを生成し，ロックされた安全なupdateを行う
 
-lock_update(Key, F) ->
-    lock_update('Peer', Key, F).
+lock_update({Type, Value}, F) ->
+    lock_update('Peer', {Type, Value}, F).
 
 lock_update(Table, Key, F) ->
     Ref = make_ref(),
@@ -1674,26 +1675,6 @@ make_membership_vector(Bin, N) ->
     make_membership_vector(<<(random:uniform(256) - 1):8, Bin/binary>>, N - 1).
 
 
-%% Peerテーブルから，UniqueKeyに対応付けられたType型の値を取り出す
-
-get_with_type(UniqueKey, Type) ->
-    F = fun(Item, Result) ->
-            case Result of
-                [] ->
-                    case Item of
-                        {UniqueKey, {Type, _, _, _}} ->
-                            [Item];
-                        _ ->
-                            Result
-                    end;
-                _ ->
-                    Result
-            end
-    end,
-
-    lists:foldl(F, [], ets:lookup('Peer', UniqueKey)).
-
-
 %%====================================================================
 %% Interfaces
 %%====================================================================
@@ -1705,13 +1686,13 @@ join(Key) ->
     join(Key, '__none__').
 
 join(UniqueKey, {Type, Value}) ->
-    case get_with_type(UniqueKey, Type) of
-        [{UniqueKey, {Type, _, _, _}}] ->
-            F = fun([{UniqueKey, {Type, _, MembershipVector, Neighbor}}]) ->
-                    {ok, {UniqueKey, {Type, Value, MembershipVector, Neighbor}}}
+    case ets:lookup('Peer', {Type, Value}) of
+        [{{Type, Value}, {_, _, _}}] ->
+            F = fun([{{Type, Value}, {UniqueList, MembershipVector, Neighbor}}]) ->
+                    {ok, {{Type, Value}, {[UniqueKey | UniqueList], MembershipVector, Neighbor}}}}
             end,
 
-            lock_update(UniqueKey, Type, F);
+            lock_update({Type, Value}, F);
 
         [] ->
             MembershipVector = make_membership_vector(),
@@ -1719,25 +1700,25 @@ join(UniqueKey, {Type, Value}) ->
                 lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
 
             InitTables = fun() ->
-                    ets:insert('Peer', {UniqueKey, {Type, Value, MembershipVector, Neighbor}}),
+                    ets:insert('Peer', {{Type, Value}, {UniqueKey, MembershipVector, Neighbor}}),
                     ets:insert('Lock-Join-Daemon',
-                        {UniqueKey,
+                        {{Type, Value}
                             spawn(fun() ->
                                         lock_daemon(fun lock_join_callback/1)
                                 end)}),
                     ets:insert('Lock-Update-Daemon',
-                        {UniqueKey,
+                        {{Type, Value},
                             spawn(fun() ->
                                         lock_daemon(fun lock_update_callback/1)
                                 end)})
             end,
 
-            case gen_server:call(whereis(?MODULE), {join, UniqueKey}) of
+            case gen_server:call(whereis(?MODULE), {join, {Type, Value}}) of
                 {ok, {'__none__', '__none__'}} ->
                     InitTables();
 
                 {ok, InitPeer} ->
-                    ets:insert('Incomplete', {UniqueKey, {{join, -1}, {remove, ?LEVEL_MAX}}}),
+                    ets:insert('Incomplete', {{Type, Value}, {{join, -1}, {remove, ?LEVEL_MAX}}}),
                     InitTables(),
 
                     join(InitPeer, UniqueKey, {Type, Value}, MembershipVector)
