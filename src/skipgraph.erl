@@ -29,6 +29,8 @@
 %%      * {join, NewKey}で，適当なピアの選択時にNewKeyを有効活用する
 %%      * join中にサーバが再起動した場合の処理
 %%      * get時に死んだノードを発見した場合の処理
+%%
+%%      * lock_update, join, join-process, get, get-process, remove
 
 -module(skipgraph).
 -behaviour(gen_server).
@@ -95,12 +97,16 @@ start(Initial) ->
 
 %% gen_server:start_linkにより呼び出される．
 init(Arg) ->
-    % {Key, {Value, MembershipVector, Neighbor}}
-    %   MembershipVector : <<1, 0, 1, 1, ...>>
-    %   Neighbor : {Smaller, Bigger}
-    %     Smaller : [{Node, Key}, ...]
-    %     Smaller : [{Node, Key}, ...]
-    T = ets:new('Peer', [ordered_set, public, named_table]),
+    % [{UniqueKey, {Type, Value1, MembershipVector, Neighbor}},
+    %  {UniqueKey, {Type, Value2, ...}},
+    %  ...]
+    %
+    %   Type: atom()
+    %   MembershipVector: byte()
+    %   Neighbor: {Smaller, Bigger}
+    %     Smaller: [{Node, Key}, ...]
+    %     Smaller: [{Node, Key}, ...]
+    T = ets:new('Peer', [bag, public, named_table]),
 
     ets:new('Lock-Update-Daemon', [set, public, named_table]),
     ets:new('Lock-Join-Daemon', [set, public, named_table]),
@@ -139,12 +145,12 @@ handle_call({'get-ets-table'}, _From, State) ->
 
 
 %% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
-handle_call({SelfKey, {put, Value}}, _From, State) ->
-    F = fun([{_SelfKey, {_Value, MembershipVector, Neighbor}}]) ->
-            {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
+handle_call({UniqueKey, {put, {Type, Value}}}, _From, State) ->
+    F = fun([{UniqueKey, {Type, _Value, MembershipVector, Neighbor}}]) ->
+            {ok, {UniqueKey, {Type, Value, MembershipVector, Neighbor}}}
     end,
 
-    lock_update(SelfKey, F),
+    lock_update(UniqueKey, Type, F),
     {reply, ok, State};
 
 
@@ -1668,24 +1674,44 @@ make_membership_vector(Bin, N) ->
     make_membership_vector(<<(random:uniform(256) - 1):8, Bin/binary>>, N - 1).
 
 
+%% Peerテーブルから，UniqueKeyに対応付けられたType型の値を取り出す
+
+get_with_type(UniqueKey, Type) ->
+    F = fun(Item, Result) ->
+            case Result of
+                [] ->
+                    case Item of
+                        {UniqueKey, {Type, _, _, _}} ->
+                            [Item];
+                        _ ->
+                            Result
+                    end;
+                _ ->
+                    Result
+            end
+    end,
+
+    lists:foldl(F, [], ets:lookup('Peer', UniqueKey)).
+
 
 %%====================================================================
 %% Interfaces
 %%====================================================================
+
 
 %% 新しいピアをjoinする
 
 join(Key) ->
     join(Key, '__none__').
 
-join(Key, Value) ->
-    case ets:lookup('Peer', Key) of
-        [{Key, {_, _, _}}] ->
-            F = fun([{SelfKey, {_Value, MembershipVector, Neighbor}}]) ->
-                    {ok, {SelfKey, {Value, MembershipVector, Neighbor}}}
+join(UniqueKey, {Type, Value}) ->
+    case get_with_type(UniqueKey, Type) of
+        [{UniqueKey, {Type, _, _, _}}] ->
+            F = fun([{UniqueKey, {Type, _, MembershipVector, Neighbor}}]) ->
+                    {ok, {UniqueKey, {Type, Value, MembershipVector, Neighbor}}}
             end,
 
-            lock_update(Key, F);
+            lock_update(UniqueKey, Type, F);
 
         [] ->
             MembershipVector = make_membership_vector(),
@@ -1693,28 +1719,28 @@ join(Key, Value) ->
                 lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
 
             InitTables = fun() ->
-                    ets:insert('Peer', {Key, {Value, MembershipVector, Neighbor}}),
+                    ets:insert('Peer', {UniqueKey, {Type, Value, MembershipVector, Neighbor}}),
                     ets:insert('Lock-Join-Daemon',
-                        {Key,
+                        {UniqueKey,
                             spawn(fun() ->
                                         lock_daemon(fun lock_join_callback/1)
                                 end)}),
                     ets:insert('Lock-Update-Daemon',
-                        {Key,
+                        {UniqueKey,
                             spawn(fun() ->
                                         lock_daemon(fun lock_update_callback/1)
                                 end)})
             end,
 
-            case gen_server:call(whereis(?MODULE), {join, Key}) of
+            case gen_server:call(whereis(?MODULE), {join, UniqueKey}) of
                 {ok, {'__none__', '__none__'}} ->
                     InitTables();
 
                 {ok, InitPeer} ->
-                    ets:insert('Incomplete', {Key, {{join, -1}, {remove, ?LEVEL_MAX}}}),
+                    ets:insert('Incomplete', {UniqueKey, {{join, -1}, {remove, ?LEVEL_MAX}}}),
                     InitTables(),
 
-                    join(InitPeer, Key, Value, MembershipVector)
+                    join(InitPeer, UniqueKey, {Type, Value}, MembershipVector)
             end
     end,
     ok.
@@ -1742,9 +1768,9 @@ join_delete_if_exist(Node, Key, Value, TableList) ->
 
 
 join(InitPeer, Key, Value, MembershipVector) ->
-    join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}, 0).
+    join(InitPeer, Key, Value, MembershipVector, 0, {'__none__', '__none__'}).
 
-join(_, Key, _, _, _, _, 100) ->
+join(_, Key, _, _, ?LEVEL_MAX, _) ->
     F = fun(Item) ->
             case Item of
                 [] ->
@@ -1757,20 +1783,7 @@ join(_, Key, _, _, _, _, 100) ->
     end,
     lock_update('Incomplete', Key, F);
 
-join(_, Key, _, _, ?LEVEL_MAX, _, _) ->
-    F = fun(Item) ->
-            case Item of
-                [] ->
-                    {pass};
-                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                [{Key, _}] ->
-                    {delete, Key}
-            end
-    end,
-    lock_update('Incomplete', Key, F);
-
-join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN) ->
+join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer) ->
     Daemon = spawn(fun() -> wait_trap([]) end),
     ets:insert('Joining-Wait',
         {{NewKey, Level}, Daemon}),
@@ -1828,7 +1841,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                     Daemon ! {trap}
             end,
 
-            join_oneway(BiggerPeer, NewKey, Value, MembershipVector, Level + 1, 0);
+            join_oneway(BiggerPeer, NewKey, Value, MembershipVector, Level + 1);
 
         {ok, {SmallerPeer, {'__none__', '__none__'}}, {Pid, Ref}} ->
             io:format("~nSmallerPeer=~p~n", [SmallerPeer]),
@@ -1855,7 +1868,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                     Daemon ! {trap}
             end,
 
-            join_oneway(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, 0);
+            join_oneway(SmallerPeer, NewKey, Value, MembershipVector, Level + 1);
 
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
             io:format("~nSmallerPeer=~p, BiggerPeer=~p, {~p, ~p}~n", [SmallerPeer, BiggerPeer, Pid, Ref]),
@@ -1883,11 +1896,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                     Daemon ! {trap}
             end,
 
-            join(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, BiggerPeer, 0);
-
-        {error, retry} ->
-            timer:sleep(3000),
-            join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, RetryN + 1);
+            join(SmallerPeer, NewKey, Value, MembershipVector, Level + 1, BiggerPeer);
 
         {error, mismatch} ->
             case OtherPeer of
@@ -1905,7 +1914,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
                     lock_update('Incomplete', NewKey, F);
 
                 _ ->
-                    join_oneway(OtherPeer, NewKey, Value, MembershipVector, Level, 0)
+                    join_oneway(OtherPeer, NewKey, Value, MembershipVector, Level)
             end;
 
         Message ->
@@ -1916,7 +1925,7 @@ join({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, OtherPeer, Ret
 
 %% 一方のNeighborが'__none__'のとき，もう一方のNeighborを通して新たなピアをjoinする
 
-join_oneway(_, Key, _, _, _, 10) ->
+join_oneway(_, Key, _, _, ?LEVEL_MAX) ->
     F = fun(Item) ->
             case Item of
                 [] ->
@@ -1929,20 +1938,7 @@ join_oneway(_, Key, _, _, _, 10) ->
     end,
     lock_update('Incomplete', Key, F);
 
-join_oneway(_, Key, _, _, ?LEVEL_MAX, _) ->
-    F = fun(Item) ->
-            case Item of
-                [] ->
-                    {pass};
-                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                [{Key, _}] ->
-                    {delete, Key}
-            end
-    end,
-    lock_update('Incomplete', Key, F);
-
-join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN) ->
+join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
     Daemon = spawn(fun() -> wait_trap([]) end),
     ets:insert('Joining-Wait',
         {{NewKey, Level}, Daemon}),
@@ -1998,11 +1994,7 @@ join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN)
                     Daemon ! {trap}
             end,
 
-            join_oneway(Peer, NewKey, Value, MembershipVector, Level + 1, 0);
-
-        {error, retry} ->
-            timer:sleep(3000),
-            join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level, RetryN + 1);
+            join_oneway(Peer, NewKey, Value, MembershipVector, Level + 1);
 
         {error, mismatch} ->
             F = fun(Item) ->
@@ -2080,8 +2072,8 @@ remove(Key, Level) ->
 %% Description(en): put value
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
-put(Key, Value) ->
-    join(Key, Value).
+put(UniqueKey, ValueList) ->
+    lists:foreach(fun(Value) -> join(UniqueKey, Value) end, ValueList).
 
 
 %%--------------------------------------------------------------------
