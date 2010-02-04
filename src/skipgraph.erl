@@ -29,8 +29,6 @@
 %%      * {join, NewKey}で，適当なピアの選択時にNewKeyを有効活用する
 %%      * join中にサーバが再起動した場合の処理
 %%      * get時に死んだノードを発見した場合の処理
-%%
-%%      * join, join-process, get, get-process, remove
 
 -module(skipgraph).
 -behaviour(gen_server).
@@ -97,8 +95,8 @@ start(Initial) ->
 
 %% gen_server:start_linkにより呼び出される．
 init(Arg) ->
-    % [{{UniqueKey, Type}, Value1, MembershipVector, Neighbor}},
-    %  {{UniqueKey, Type}, Value2, ...}},
+    % [{{Type, Value}, UniqueKey, MembershipVector, Neighbor}},
+    %  {{Type, Value}, UniqueKey, ...}},
     %  ...]
     %
     %   Type: atom()
@@ -107,8 +105,8 @@ init(Arg) ->
     %     Smaller: [{Node, Key}, ...]
     %     Smaller: [{Node, Key}, ...]
     T = ets:new('Peer', [set, public, named_table]),
-
     ets:new('Types', [set, public, named_table]),
+
     ets:new('Lock-Update-Daemon', [set, public, named_table]),
     ets:new('Lock-Join-Daemon', [set, public, named_table]),
     ets:new('Joining-Wait', [set, public, named_table]),
@@ -146,12 +144,12 @@ handle_call({'get-ets-table'}, _From, State) ->
 
 
 %% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
-handle_call({{Type, Value}, {put, UniqueKey}}, _From, State) ->
-    F = fun([{{Type, Value}, {UniqueList, MembershipVector, Neighbor}}]) ->
-            {ok, {{Tree, Value}, {[UniqueKey | UniqueList], MembershipVector, Neighbor}}}
+handle_call({{Type, Key}, {put, UniqueKey}}, _From, State) ->
+    F = fun([{{Type, Key}, {UniqueList, MembershipVector, Neighbor}}]) ->
+            {ok, {{Type, Key}, {[UniqueKey | UniqueList], MembershipVector, Neighbor}}}
     end,
 
-    lock_update({Type, Value}, F),
+    lock_update({Type, Key}, F),
     {reply, ok, State};
 
 
@@ -299,7 +297,7 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}},
 
 
 %% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す．
-handle_call({join, _NewKey},
+handle_call({'select-first-peer', _NewKey},
     From,
     [InitialNode | Tail]) ->
 
@@ -1685,14 +1683,14 @@ make_membership_vector(Bin, N) ->
 join(Key) ->
     join(Key, '__none__').
 
-join(UniqueKey, {Type, Value}) ->
-    case ets:lookup('Peer', {Type, Value}) of
-        [{{Type, Value}, {_, _, _}}] ->
-            F = fun([{{Type, Value}, {UniqueList, MembershipVector, Neighbor}}]) ->
-                    {ok, {{Type, Value}, {[UniqueKey | UniqueList], MembershipVector, Neighbor}}}}
+join(UniqueKey, {Type, Key}) ->
+    case ets:lookup('Peer', {Type, Key}) of
+        [{{Type, Key}, {_, _, _}}] ->
+            F = fun([{{Type, Key}, {UniqueList, MembershipVector, Neighbor}}]) ->
+                    {ok, {{Type, Key}, {[UniqueKey | UniqueList], MembershipVector, Neighbor}}}
             end,
 
-            lock_update({Type, Value}, F);
+            lock_update({Type, Key}, F);
 
         [] ->
             MembershipVector = make_membership_vector(),
@@ -1700,28 +1698,28 @@ join(UniqueKey, {Type, Value}) ->
                 lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
 
             InitTables = fun() ->
-                    ets:insert('Peer', {{Type, Value}, {UniqueKey, MembershipVector, Neighbor}}),
+                    ets:insert('Peer', {{Type, Key}, {UniqueKey, MembershipVector, Neighbor}}),
                     ets:insert('Lock-Join-Daemon',
-                        {{Type, Value}
+                        {{Type, Key},
                             spawn(fun() ->
                                         lock_daemon(fun lock_join_callback/1)
                                 end)}),
                     ets:insert('Lock-Update-Daemon',
-                        {{Type, Value},
+                        {{Type, Key},
                             spawn(fun() ->
                                         lock_daemon(fun lock_update_callback/1)
                                 end)})
             end,
 
-            case gen_server:call(whereis(?MODULE), {join, {Type, Value}}) of
+            case gen_server:call(whereis(?MODULE), {'select-first-peer', {Type, Key}}) of
                 {ok, {'__none__', '__none__'}} ->
                     InitTables();
 
                 {ok, InitPeer} ->
-                    ets:insert('Incomplete', {{Type, Value}, {{join, -1}, {remove, ?LEVEL_MAX}}}),
+                    ets:insert('Incomplete', {{Type, Key}, {{join, -1}, {remove, ?LEVEL_MAX}}}),
                     InitTables(),
 
-                    join(InitPeer, UniqueKey, {Type, Value}, MembershipVector)
+                    join(InitPeer, {Type, Key}, UniqueKey, MembershipVector)
             end
     end,
     ok.
@@ -2053,8 +2051,13 @@ remove(Key, Level) ->
 %% Description(en): put value
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
-put(UniqueKey, ValueList) ->
-    lists:foreach(fun(Value) -> join(UniqueKey, Value) end, ValueList).
+put(UniqueKey, KeyList) ->
+    F = fun(Key) ->
+            join(UniqueKey, Key)
+    end,
+
+    ets:insert('Types', {UniqueKey, [Type || {Type, _} <- KeyList]}),
+    lists:foreach(F, KeyList).
 
 
 %%--------------------------------------------------------------------

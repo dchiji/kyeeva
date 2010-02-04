@@ -3,15 +3,15 @@
 
 benchmark() ->
     {ok, Server} = skipgraph:start('__none__'),
-    skipgraph:join(0),
+    skipgraph:put(0, [{type, 0}]),
     join(),
     timer:sleep(infinity).
 
 join() ->
-    join(1, 1000000).
+    join(1, 1000).
 
 join(N, N) ->
     ok;
 join(N, M) ->
-    skipgraph:join(N),
+    skipgraph:put(N, [{type, N}, {inc, N + 1}]),
     join(N + 1, M).
