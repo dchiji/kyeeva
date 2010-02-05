@@ -35,7 +35,7 @@
 
 -export([start/1, init/1, handle_call/3, terminate/2,
         handle_cast/2, handle_info/2, code_change/3,
-        join/1, join/2, remove/1, test/0, get/1, get/2, put/2]).
+        join/1, join/2, remove/1, test/0, get/1, get/2, get/3, put/2]).
 
 -export([get_server/0, get_peer/0]).
 
@@ -154,7 +154,7 @@ handle_call({{Type, Key}, {put, UniqueKey}}, _From, State) ->
 
 
 %% getメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，get_process_0に繋げる．
-handle_call({get, Key0, Key1},
+handle_call({get, Key0, Key1, TypeList},
     From,
     [InitialNode | Tail]) ->
 
@@ -172,7 +172,7 @@ handle_call({get, Key0, Key1},
                             gen_server:call(InitialNode,
                                 {InitKey,
                                     {'get-process-0',
-                                        {Key0, Key1, From}}})
+                                        {Key0, Key1, TypeList, From}}})
                     end;
 
                 _ ->
@@ -180,7 +180,7 @@ handle_call({get, Key0, Key1},
                     gen_server:call(?MODULE,
                         {SelfKey,
                             {'get-process-0',
-                                {Key0, Key1, From}}})
+                                {Key0, Key1, TypeList, From}}})
             end
     end,
 
@@ -189,7 +189,7 @@ handle_call({get, Key0, Key1},
 
 
 %% 最適なピアを探索する．
-handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
+handle_call({SelfKey, {'get-process-0', {Key0, Key1, TypeList, From}}},
     _From,
     State) ->
 
@@ -207,13 +207,13 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
                     gen_server:call(?MODULE,
                         {SelfKey,
                             {'get-process-1',
-                                {Key0, Key1, From},
+                                {Key0, Key1, TypeType, From},
                                 []}});
                 {'__self__'} ->
                     gen_server:call(?MODULE,
                         {SelfKey,
                             {'get-process-1',
-                                {Key0, Key1, From},
+                                {Key0, Key1, TypeList, From},
                                 []}});
 
                 % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
@@ -235,7 +235,7 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
                                         gen_server:call(BestNode,
                                             {Key0,
                                                 {'get-process-0',
-                                                    {Key0, Key1, From}}})
+                                                    {Key0, Key1, TypeList, From}}})
                                 end)
                     end;
 
@@ -245,7 +245,7 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
                                 gen_server:call(BestNode,
                                     {BestKey,
                                         {'get-process-0',
-                                            {Key0, Key1, From}}})
+                                            {Key0, Key1, Type, From}}})
                         end)
             end
     end,
@@ -255,7 +255,7 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, From}}},
 
 
 %% 指定された範囲内を走査し，値を収集する．
-handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}},
+handle_call({SelfKey, {'get-process-1', {Key0, Key1, TypeList, From}, ItemList}},
     _From,
     State) ->
 
@@ -270,7 +270,7 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}},
                             gen_server:call(NextNode,
                                 {NextKey,
                                     {'get-process-1',
-                                        {Key0, Key1, From},
+                                        {Key0, Key1, TypeList, From},
                                         ItemList}})
                     end;
 
@@ -286,7 +286,7 @@ handle_call({SelfKey, {'get-process-1', {Key0, Key1, From}, ItemList}},
                             gen_server:call(NextNode,
                                 {NextKey,
                                     {'get-process-1',
-                                        {Key0, Key1, From},
+                                        {Key0, Key1, TypeList, From},
                                         [{SelfKey, Value} | ItemList]}})
                     end
             end
@@ -2067,12 +2067,15 @@ put(UniqueKey, KeyList) ->
 %% Returns: {ok, [{Key, Value}, ...]} | {error, Reason}
 %%--------------------------------------------------------------------
 get(Key) ->
-    gen_server:call(?MODULE, {get, Key, Key}).
+    get(Key, [value]).
 
-get(Key0, Key1) when Key1 < Key0 ->
-    get(Key1, Key0);
-get(Key0, Key1) ->
-    gen_server:call(?MODULE, {get, Key0, Key1}).
+get(Key, TypeList) ->
+    gen_server:call(?MODULE, {get, Key, Key, TypeList}).
+
+get(Key0, Key1, TypeList) when Key1 < Key0 ->
+    get(Key1, Key0, TypeList);
+get(Key0, Key1, TypeList) ->
+    gen_server:call(?MODULE, {get, Key0, Key1, TypeList}).
 
 
 test() ->
