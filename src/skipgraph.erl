@@ -207,7 +207,7 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, TypeList, From}}},
                     gen_server:call(?MODULE,
                         {SelfKey,
                             {'get-process-1',
-                                {Key0, Key1, TypeType, From},
+                                {Key0, Key1, TypeList, From},
                                 []}});
                 {'__self__'} ->
                     gen_server:call(?MODULE,
@@ -245,7 +245,7 @@ handle_call({SelfKey, {'get-process-0', {Key0, Key1, TypeList, From}}},
                                 gen_server:call(BestNode,
                                     {BestKey,
                                         {'get-process-0',
-                                            {Key0, Key1, Type, From}}})
+                                            {Key0, Key1, TypeList, From}}})
                         end)
             end
     end,
@@ -2057,6 +2057,8 @@ put(UniqueKey, KeyList) ->
     end,
 
     ets:insert('Types', {UniqueKey, [Type || {Type, _} <- KeyList]}),
+    join(UniqueKey, {'unique-key', UniqueKey}),
+
     lists:foreach(F, KeyList).
 
 
