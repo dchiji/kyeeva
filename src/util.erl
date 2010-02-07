@@ -25,7 +25,11 @@
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -module(util).
--export([]).
+
+-export([wait_trap/1, wait_trapped/1]).
+-export([lock_daemon/1, lock_join/2, lock_join_callback/1, lock_update/2, lock_update/3, lock_update_callback/1, update/3]).
+-export([select_best/3, make_membership_vector/0]).
+
 
 %-define(LEVEL_MAX, 8).
 %-define(LEVEL_MAX, 16).
@@ -37,6 +41,7 @@
 -define(TIMEOUT, infinity).
 
 -define(SERVER_MODULE, skipgraph).
+
 
 %%====================================================================
 %% Transactions
