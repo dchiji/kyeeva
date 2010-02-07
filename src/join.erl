@@ -113,7 +113,7 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
             case Level of
                 0 ->
-                    case select_best(Neighbor, NewKey, S_or_B) of
+                    case util:select_best(Neighbor, NewKey, S_or_B) of
                         % 最適なピアが見つかったので、次のフェーズ(process_1)へ移行．
                         % 他の処理をlockしておくために関数として(process_1フェーズへ)移行する．
                         {'__none__', '__none__'} ->
@@ -172,12 +172,12 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                             % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
                             BestPeer = case ets:lookup('Incomplete', SelfKey) of
                                 [{SelfKey, {join, MaxLevel_}}] when (MaxLevel_ + 1) == Level ->
-                                    select_best(lists:nthtail(MaxLevel_, Neighbor), NewKey, S_or_B);
+                                    util:select_best(lists:nthtail(MaxLevel_, Neighbor), NewKey, S_or_B);
                                 [{SelfKey, {join, MaxLevel_}}] when MaxLevel_ < Level ->
                                     % バグが無ければ，このパターンになることはない
                                     error;
                                 _ ->
-                                    select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B)
+                                    util:select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B)
                             end,
                             %io:format("BestKey=~p~n", [BestKey]),
 
@@ -218,7 +218,7 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
 %% process_0/3関数から呼び出される．
 %% MembershipVector[Level]が一致するピアを外側に向かって探索．
-%% 成功したら自身のNeighborをupdateし，Anotherにもupdateメッセージを送信する．
+%% 成功したら自身のNeighborをutil:updateし，Anotherにもutil:updateメッセージを送信する．
 process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     io:format("join:process_1: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
@@ -228,7 +228,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     <<_:TailN, SelfBit:1, _:Level>> = SelfMembershipVector,
 
     case Bit of
-        % MembershipVector[Level]が一致するのでupdate処理を行う
+        % MembershipVector[Level]が一致するのでutil:update処理を行う
         SelfBit ->
             case ets:lookup('Incomplete', SelfKey) of
                 % ピアのNeighborがまだ未完成な場合，強制的に次のノードへ移る
@@ -272,7 +272,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                                                 MembershipVector}},
                                                         Level});
 
-                                            {error, Ref, Message} ->
+                                            {error, Ref, _Message} ->
                                                 pass
                                         end
                                 end),
@@ -280,7 +280,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                             Daemon ! {add, {Pid, Ref}}
                     end;
 
-                % update処理を行い，反対側のピアにもメッセージを送信する
+                % util:update処理を行い，反対側のピアにもメッセージを送信する
                 _ ->
                     Ref = make_ref(),
 
@@ -293,14 +293,14 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
                     case lists:nth(Level + 1, Neighbor) of
                         {'__none__', '__none__'} ->
-                            io:format("update0, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, {'__none__', '__none__'}, NewKey]),
+                            io:format("util:update0, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, {'__none__', '__none__'}, NewKey]),
 
                             gen_server:reply(From, Reply),
 
                             % reply先がNeighborの更新に成功するまで待機
                             receive
                                 {ok, Ref} ->
-                                    update(SelfKey, {Server, NewKey}, Level),
+                                    util:update(SelfKey, {Server, NewKey}, Level),
 
                                     case ets:lookup('ETS-Table', Server) of
                                         [] ->
@@ -312,7 +312,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                             ok
                                     end;
 
-                                {error, Ref, Message} ->
+                                {error, Ref, _Message} ->
                                     pass
                             end;
 
@@ -342,7 +342,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                                     ok
                                             end;
 
-                                        {error, Ref, Message} ->
+                                        {error, Ref, _Message} ->
                                             pass
                                     end
                             end,
@@ -353,8 +353,8 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                     io:format("update1, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, OtherKey, NewKey]),
 
                                     Update = fun() ->
-                                            update(SelfKey, {Server, NewKey}, Level),
-                                            update(OtherKey, {Server, NewKey}, Level)
+                                            util:update(SelfKey, {Server, NewKey}, Level),
+                                            util:update(OtherKey, {Server, NewKey}, Level)
                                     end,
 
                                     F(Update);
@@ -369,7 +369,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                                             NewKey}},
                                                     Level,
                                                     {whereis(?SERVER_MODULE), SelfKey}}),
-                                            update(SelfKey, {Server, NewKey}, Level)
+                                            util:update(SelfKey, {Server, NewKey}, Level)
                                     end,
 
                                     F(Update)
@@ -492,7 +492,7 @@ process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
             case Level of
                 0 ->
-                    case select_best(Neighbor, NewKey, S_or_B) of
+                    case util:select_best(Neighbor, NewKey, S_or_B) of
                         % 最適なピアが見つかったので、次のフェーズ(process_1_oneway)へ移行．
                         % 他の処理をlockしておくために関数として(process_1_onewayフェーズへ)移行する．
                         {'__none__', '__none__'} ->
@@ -555,12 +555,12 @@ process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                             % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
                             BestPeer = case ets:lookup('Incomplete', SelfKey) of
                                 [{SelfKey, {join, MaxLevel_}}] when (MaxLevel_ + 1) == Level ->
-                                    select_best(lists:nthtail(MaxLevel_, Neighbor), NewKey, S_or_B);
+                                    util:select_best(lists:nthtail(MaxLevel_, Neighbor), NewKey, S_or_B);
                                 [{SelfKey, {join, MaxLevel_}}] when MaxLevel_ < Level ->
                                     % バグが無ければ，このパターンになることはない
                                     error;
                                 _ ->
-                                    select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B)
+                                    util:select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B)
                             end,
 
                             case BestPeer of
@@ -651,7 +651,7 @@ process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                                                 MembershipVector}},
                                                         Level});
 
-                                            {error, Ref, Message} ->
+                                            {error, Ref, _Message} ->
                                                 pass
                                         end
                                 end),
@@ -668,7 +668,7 @@ process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                     % reply先がNeighborの更新に成功するまで待機
                     receive
                         {ok, Ref} ->
-                            update(SelfKey, {Server, NewKey}, Level),
+                            util:update(SelfKey, {Server, NewKey}, Level),
                             case ets:lookup('ETS-Table', Server) of
                                 [] ->
                                     spawn(fun() ->
@@ -679,7 +679,7 @@ process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                     ok
                             end;
 
-                        {error, Ref, Message} ->
+                        {error, Ref, _Message} ->
                             pass
                     end
 

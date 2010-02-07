@@ -58,7 +58,7 @@ process_0(SelfKey, {From, RemovedKey}, Level) ->
     case IsSelf of
         true ->
             spawn(fun() ->
-                        remove(RemovedKey)
+                        skipgraph:remove(RemovedKey)
                 end);
 
         false ->
@@ -130,7 +130,7 @@ process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
         RemovedKey ->
             case NewNeighbor of
                 {'__none__', '__none__'} ->
-                    update(SelfKey, NewNeighbor, Level);
+                    util:update(SelfKey, NewNeighbor, Level);
 
                 {NewNode, NewKey} ->
                     gen_server:call(NewNode,
@@ -141,7 +141,7 @@ process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
                                 {whereis(?SERVER_MODULE), SelfKey},
                                 Level}}),
 
-                    update(SelfKey, NewNeighbor, Level)
+                    util:update(SelfKey, NewNeighbor, Level)
             end;
 
         _ ->
@@ -162,7 +162,7 @@ process_3(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
 
     case OldKey of
         RemovedKey ->
-            update(SelfKey, NewNeighbor, Level);
+            util:update(SelfKey, NewNeighbor, Level);
         _ ->
             pass
     end.
