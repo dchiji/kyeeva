@@ -153,146 +153,36 @@ handle_call({{Type, Key}, {put, UniqueKey}}, _From, State) ->
     {reply, ok, State};
 
 
-%% getメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，get_process_0に繋げる．
-handle_call({get, Key0, Key1, TypeList},
+%% lookupメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，lookup_process_0に繋げる．
+handle_call({lookup, Key0, Key1, TypeList},
     From,
     [InitialNode | Tail]) ->
 
-    F = fun() ->
-            PeerList = ets:tab2list('Peer'),
-            case PeerList of
-                [] ->
-                    case InitialNode of
-                        '__none__' ->
-                            gen_server:reply(From,
-                                {ok, {'__none__', '__none__'}});
-
-                        _ ->
-                            {_, InitKey} = gen_server:call(InitialNode, {peer, random}),
-                            gen_server:call(InitialNode,
-                                {InitKey,
-                                    {'get-process-0',
-                                        {Key0, Key1, TypeList, From}}})
-                    end;
-
-                _ ->
-                    [{SelfKey, {_, _, _}} | _] = PeerList,
-                    gen_server:call(?MODULE,
-                        {SelfKey,
-                            {'get-process-0',
-                                {Key0, Key1, TypeList, From}}})
-            end
-    end,
-
-    spawn(F),
+    spawn(fun() ->
+                lookup:lookup(InitialNode, Key0, Key1, TypeList, From)
+        end),
     {noreply, [InitialNode | Tail]};
 
 
 %% 最適なピアを探索する．
-handle_call({SelfKey, {'get-process-0', {Key0, Key1, TypeList, From}}},
+handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, TypeList, From}}},
     _From,
     State) ->
 
-    F = fun() ->
-            [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
-
-            {Neighbor, S_or_B} = if
-                Key0 =< SelfKey -> {Smaller, smaller};
-                SelfKey < Key0 -> {Bigger, bigger}
-            end,
-
-            case util:select_best(Neighbor, Key0, S_or_B) of
-                % 最適なピアが見つかったので、次のフェーズ(get-process-1)へ移行
-                {'__none__', '__none__'} ->
-                    gen_server:call(?MODULE,
-                        {SelfKey,
-                            {'get-process-1',
-                                {Key0, Key1, TypeList, From},
-                                []}});
-                {'__self__'} ->
-                    gen_server:call(?MODULE,
-                        {SelfKey,
-                            {'get-process-1',
-                                {Key0, Key1, TypeList, From},
-                                []}});
-
-                % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
-                {BestNode, Key0} when Key0 == Key1 ->
-                    case ets:lookup('ETS-Table', BestNode) of
-                        [{BestNode, Tab}] ->
-                            [{BestNode, Tab} | _] = ets:lookup('ETS-Table', BestNode),
-                            case ets:lookup(Tab, Key0) of
-                                [{Key0, {Value, _, _}} | _] ->
-                                    io:format("ets~n"),
-                                    gen_server:reply(From, {ok, [{Key0, Value}]});
-
-                                [] ->
-                                    gen_server:reply(From, {ok, []})
-                            end;
-
-                        _ ->
-                            spawn(fun() ->
-                                        gen_server:call(BestNode,
-                                            {Key0,
-                                                {'get-process-0',
-                                                    {Key0, Key1, TypeList, From}}})
-                                end)
-                    end;
-
-                % 最適なピアの探索を続ける(get-process-0)
-                {BestNode, BestKey} ->
-                    spawn(fun() ->
-                                gen_server:call(BestNode,
-                                    {BestKey,
-                                        {'get-process-0',
-                                            {Key0, Key1, TypeList, From}}})
-                        end)
-            end
-    end,
-
-    spawn(F),
+    spawn(fun() ->
+                lookup:process_0(SelfKey, Key0, Key1, TypeList, From)
+        end),
     {reply, '__none__', State};
 
 
 %% 指定された範囲内を走査し，値を収集する．
-handle_call({SelfKey, {'get-process-1', {Key0, Key1, TypeList, From}, ItemList}},
+handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, TypeList, From}, ItemList}},
     _From,
     State) ->
 
-    F = fun() ->
-            if
-                SelfKey < Key0 ->
-                    [{SelfKey, {_, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
-                    case {NextNode, NextKey} of
-                        {'__none__', '__none__'} ->
-                            gen_server:reply(From, {ok, ItemList});
-                        _ ->
-                            gen_server:call(NextNode,
-                                {NextKey,
-                                    {'get-process-1',
-                                        {Key0, Key1, TypeList, From},
-                                        ItemList}})
-                    end;
-
-                Key1 < SelfKey ->
-                    gen_server:reply(From, {ok, ItemList});
-
-                true ->
-                    [{SelfKey, {Value, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
-                    case {NextNode, NextKey} of
-                        {'__none__', '__none__'} ->
-                            gen_server:reply(From, {ok, [{SelfKey, Value} | ItemList]});
-                        _ ->
-                            gen_server:call(NextNode,
-                                {NextKey,
-                                    {'get-process-1',
-                                        {Key0, Key1, TypeList, From},
-                                        [{SelfKey, Value} | ItemList]}})
-                    end
-            end
-    end,
-
-    spawn(F),
+    spawn(fun() ->
+                lookup:process_1(SelfKey, Key0, Key1, TypeList, From, ItemList)
+        end),
     {noreply, State};
 
 
@@ -993,12 +883,12 @@ get(Key) ->
     get(Key, [value]).
 
 get(Key, TypeList) ->
-    gen_server:call(?MODULE, {get, Key, Key, TypeList}).
+    gen_server:call(?MODULE, {lookup, Key, Key, TypeList}).
 
 get(Key0, Key1, TypeList) when Key1 < Key0 ->
     get(Key1, Key0, TypeList);
 get(Key0, Key1, TypeList) ->
-    gen_server:call(?MODULE, {get, Key0, Key1, TypeList}).
+    gen_server:call(?MODULE, {lookup, Key0, Key1, TypeList}).
 
 
 test() ->
