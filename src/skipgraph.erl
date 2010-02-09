@@ -730,7 +730,7 @@ join_oneway(_, Key, _, _, ?LEVEL_MAX) ->
                     {delete, Key}
             end
     end,
-    uril:lock_update('Incomplete', Key, F);
+    util:lock_update('Incomplete', Key, F);
 
 join_oneway({InitNode, InitKey}, NewKey, Value, MembershipVector, Level) ->
     Daemon = spawn(fun() -> util:wait_trap([]) end),

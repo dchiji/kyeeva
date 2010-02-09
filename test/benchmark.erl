@@ -13,5 +13,5 @@ join() ->
 join(N, N) ->
     ok;
 join(N, M) ->
-    skipgraph:put(N, [{type, N}, {inc, N + 1}]),
+    skipgraph:put(N, [{random, random:uniform(100000)}, {type, N}, {inc, N + 1}]),
     join(N + 1, M).

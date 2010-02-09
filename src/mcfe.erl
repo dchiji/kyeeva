@@ -24,7 +24,7 @@
 %%    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--module(mc_cover).
+-module(mcfe).
 -export([start/0, init/1]).
 -behaviour(supervisor).
 

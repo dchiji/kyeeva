@@ -165,5 +165,5 @@ get_values(_UniqueKey, []) ->
     [];
 get_values(UniqueKey, [Type | Tail]) ->
     [{{UniqueKey, Type}, Value}] = ets:lookup('Types', {UniqueKey, Type}),
-    [{Type, Value}, get_values(UniqueKey, Tail)].
+    [{Type, Value} | get_values(UniqueKey, Tail)].
 

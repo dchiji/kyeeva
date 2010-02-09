@@ -8,7 +8,7 @@
 
 ERL = erl 
 
-MODS = src/skipgraph test/test src/mc_cover test/benchmark
+MODS = src/skipgraph src/join src/lookup src/remove src/util test/test src/mcfe test/benchmark
 
 all: compile
 
