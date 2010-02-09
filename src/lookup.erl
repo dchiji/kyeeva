@@ -27,6 +27,7 @@
 -module(lookup).
 -export([lookup/5, process_0/5, process_1/6]).
 
+
 %-define(LEVEL_MAX, 8).
 %-define(LEVEL_MAX, 16).
 -define(LEVEL_MAX, 32).
@@ -37,6 +38,7 @@
 -define(TIMEOUT, infinity).
 
 -define(SERVER_MODULE, skipgraph).
+
 
 lookup(InitialNode, Key0, Key1, TypeList, From) ->
     PeerList = ets:tab2list('Peer'),
@@ -138,16 +140,30 @@ process_1(SelfKey, Key0, Key1, TypeList, From, ItemList) ->
             gen_server:reply(From, {ok, ItemList});
 
         true ->
-            [{SelfKey, {Value, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+            [{SelfKey, {UniqueKey, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+
+            ValueList = case TypeList of
+                [] ->
+                    get_values(UniqueKey, [value]);
+                _ ->
+                    get_values(UniqueKey, TypeList)
+            end,
+
             case {NextNode, NextKey} of
                 {'__none__', '__none__'} ->
-                    gen_server:reply(From, {ok, [{SelfKey, Value} | ItemList]});
+                    gen_server:reply(From, {ok, [{UniqueKey, ValueList} | ItemList]});
                 _ ->
                     gen_server:call(NextNode,
                         {NextKey,
                             {'lookup-process-1',
                                 {Key0, Key1, TypeList, From},
-                                [{SelfKey, Value} | ItemList]}})
+                                [{UniqueKey, ValueList} | ItemList]}})
             end
     end.
+
+get_values(_UniqueKey, []) ->
+    [];
+get_values(UniqueKey, [Type | Tail]) ->
+    [{{UniqueKey, Type}, Value}] = ets:lookup('Types', {UniqueKey, Type}),
+    [{Type, Value}, get_values(UniqueKey, Tail)].
 

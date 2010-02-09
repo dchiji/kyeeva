@@ -510,6 +510,7 @@ join(UniqueKey, {Type, Key}) ->
 
             InitTables = fun() ->
                     ets:insert('Peer', {{Type, Key}, {UniqueKey, MembershipVector, Neighbor}}),
+
                     ets:insert('Lock-Join-Daemon',
                         {{Type, Key},
                             spawn(fun() ->
@@ -519,7 +520,10 @@ join(UniqueKey, {Type, Key}) ->
                         {{Type, Key},
                             spawn(fun() ->
                                         util:lock_daemon(fun util:lock_update_callback/1)
-                                end)})
+                                end)}),
+
+                    ets:insert('Types', {UniqueKey, Type}),
+                    ets:insert('Types', {{UniqueKey, Type}, Key})
             end,
 
             case gen_server:call(whereis(?MODULE), {'select-first-peer', {Type, Key}}) of
