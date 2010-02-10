@@ -154,14 +154,16 @@ handle_call({{Type, Key}, {put, UniqueKey}}, _From, State) ->
 
 
 %% lookupメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，lookup_process_0に繋げる．
-handle_call({lookup, Key0, Key1, TypeList},
-    From,
+handle_call({lookup, Key0, Key1, TypeList, From},
+    _From,
     [InitialNode | Tail]) ->
 
+    Ref = make_ref(),
+
     spawn(fun() ->
-                lookup:lookup(InitialNode, Key0, Key1, TypeList, From)
+                lookup:lookup(InitialNode, Key0, Key1, TypeList, {Ref, From})
         end),
-    {noreply, [InitialNode | Tail]};
+    {reply, Ref, [InitialNode | Tail]};
 
 
 %% 最適なピアを探索する．
@@ -176,12 +178,12 @@ handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, TypeList, From}}},
 
 
 %% 指定された範囲内を走査し，値を収集する．
-handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, TypeList, From}, ItemList}},
+handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, TypeList, From}}},
     _From,
     State) ->
 
     spawn(fun() ->
-                lookup:process_1(SelfKey, Key0, Key1, TypeList, From, ItemList)
+                lookup:process_1(SelfKey, Key0, Key1, TypeList, From)
         end),
     {noreply, State};
 
@@ -887,12 +889,12 @@ get(Key) ->
     get(Key, [value]).
 
 get(Key, TypeList) ->
-    gen_server:call(?MODULE, {lookup, Key, Key, TypeList}).
+    lookup:call(?MODULE, Key, Key, TypeList).
 
 get(Key0, Key1, TypeList) when Key1 < Key0 ->
     get(Key1, Key0, TypeList);
 get(Key0, Key1, TypeList) ->
-    gen_server:call(?MODULE, {lookup, Key0, Key1, TypeList}).
+    lookup:call(?MODULE, Key0, Key1, TypeList).
 
 
 test() ->

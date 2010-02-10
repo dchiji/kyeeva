@@ -25,7 +25,7 @@
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -module(lookup).
--export([lookup/5, process_0/5, process_1/6]).
+-export([lookup/5, process_0/5, process_1/5, call/4]).
 
 
 %-define(LEVEL_MAX, 8).
@@ -65,6 +65,7 @@ lookup(InitialNode, Key0, Key1, TypeList, From) ->
                         {Key0, Key1, TypeList, From}}})
     end.
 
+
 process_0(SelfKey, Key0, Key1, TypeList, From) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
@@ -79,14 +80,12 @@ process_0(SelfKey, Key0, Key1, TypeList, From) ->
             gen_server:call(?SERVER_MODULE,
                 {SelfKey,
                     {'lookup-process-1',
-                        {Key0, Key1, TypeList, From},
-                        []}});
+                        {Key0, Key1, TypeList, From}}});
         {'__self__'} ->
             gen_server:call(?SERVER_MODULE,
                 {SelfKey,
                     {'lookup-process-1',
-                        {Key0, Key1, TypeList, From},
-                        []}});
+                        {Key0, Key1, TypeList, From}}});
 
         % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
         {BestNode, Key0} when Key0 == Key1 ->
@@ -121,23 +120,23 @@ process_0(SelfKey, Key0, Key1, TypeList, From) ->
                 end)
     end.
 
-process_1(SelfKey, Key0, Key1, TypeList, From, ItemList) ->
+
+process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
     if
         SelfKey < Key0 ->
             [{SelfKey, {_, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
             case {NextNode, NextKey} of
                 {'__none__', '__none__'} ->
-                    gen_server:reply(From, {ok, ItemList});
+                    From ! {Ref, {'get-end'}};
                 _ ->
                     gen_server:call(NextNode,
                         {NextKey,
                             {'lookup-process-1',
-                                {Key0, Key1, TypeList, From},
-                                ItemList}})
+                                {Key0, Key1, TypeList, {Ref, From}}}})
             end;
 
         Key1 < SelfKey ->
-            gen_server:reply(From, {ok, ItemList});
+            From ! {Ref, {'get-end'}};
 
         true ->
             [{SelfKey, {UniqueKey, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
@@ -149,21 +148,38 @@ process_1(SelfKey, Key0, Key1, TypeList, From, ItemList) ->
                     get_values(UniqueKey, TypeList)
             end,
 
+            From ! {Ref, {'get-reply', {UniqueKey, ValueList}}},
+
             case {NextNode, NextKey} of
                 {'__none__', '__none__'} ->
-                    gen_server:reply(From, {ok, [{UniqueKey, ValueList} | ItemList]});
+                    From ! {Ref, {'get-end'}};
                 _ ->
                     gen_server:call(NextNode,
                         {NextKey,
                             {'lookup-process-1',
-                                {Key0, Key1, TypeList, From},
-                                [{UniqueKey, ValueList} | ItemList]}})
+                                {Key0, Key1, TypeList, {Ref, From}}}})
             end
     end.
+
 
 get_values(_UniqueKey, []) ->
     [];
 get_values(UniqueKey, [Type | Tail]) ->
+    io:format("UniqueKey=~p, Type=~p~n", [UniqueKey, Type]),
     [{{UniqueKey, Type}, Value}] = ets:lookup('Types', {UniqueKey, Type}),
     [{Type, Value} | get_values(UniqueKey, Tail)].
+
+
+call(Module, Key0, Key1, TypeList) ->
+    Ref = gen_server:call(Module, {lookup, Key0, Key1, TypeList, self()}),
+
+    call(Ref, []).
+
+call(Ref, List) ->
+    receive
+        {Ref, {'get-reply', ValueList}} ->
+            call(Ref, [ValueList | List]);
+        {Ref, {'get-end'}} ->
+            List
+    end.
 
