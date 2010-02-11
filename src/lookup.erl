@@ -66,7 +66,7 @@ lookup(InitialNode, Key0, Key1, TypeList, From) ->
     end.
 
 
-process_0(SelfKey, Key0, Key1, TypeList, From) ->
+process_0(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     {Neighbor, S_or_B} = if
@@ -80,12 +80,12 @@ process_0(SelfKey, Key0, Key1, TypeList, From) ->
             gen_server:call(?SERVER_MODULE,
                 {SelfKey,
                     {'lookup-process-1',
-                        {Key0, Key1, TypeList, From}}});
+                        {Key0, Key1, TypeList, {Ref, From}}}});
         {'__self__'} ->
             gen_server:call(?SERVER_MODULE,
                 {SelfKey,
                     {'lookup-process-1',
-                        {Key0, Key1, TypeList, From}}});
+                        {Key0, Key1, TypeList, {Ref, From}}}});
 
         % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
         {BestNode, Key0} when Key0 == Key1 ->
@@ -93,12 +93,19 @@ process_0(SelfKey, Key0, Key1, TypeList, From) ->
                 [{BestNode, Tab}] ->
                     [{BestNode, Tab} | _] = ets:lookup('ETS-Table', BestNode),
                     case ets:lookup(Tab, Key0) of
-                        [{Key0, {Value, _, _}} | _] ->
-                            io:format("ets~n"),
-                            gen_server:reply(From, {ok, [{Key0, Value}]});
+                        [{Key0, {UniqueKey, _, _}} | _] ->
+                            ValueList = case TypeList of
+                                [] ->
+                                    get_values(UniqueKey, [value]);
+                                _ ->
+                                    get_values(UniqueKey, TypeList)
+                            end,
+
+                            From ! {Ref, {'get-reply', {UniqueKey, ValueList}}},
+                            From ! {Ref, {'get-end'}};
 
                         [] ->
-                            gen_server:reply(From, {ok, []})
+                            From ! {Ref, {'get-end'}}
                     end;
 
                 _ ->
@@ -106,7 +113,7 @@ process_0(SelfKey, Key0, Key1, TypeList, From) ->
                                 gen_server:call(BestNode,
                                     {Key0,
                                         {'lookup-process-0',
-                                            {Key0, Key1, TypeList, From}}})
+                                            {Key0, Key1, TypeList, {Ref, From}}}})
                         end)
             end;
 
@@ -116,7 +123,7 @@ process_0(SelfKey, Key0, Key1, TypeList, From) ->
                         gen_server:call(BestNode,
                             {BestKey,
                                 {'lookup-process-0',
-                                    {Key0, Key1, TypeList, From}}})
+                                    {Key0, Key1, TypeList, {Ref, From}}}})
                 end)
     end.
 
@@ -165,9 +172,13 @@ process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
 get_values(_UniqueKey, []) ->
     [];
 get_values(UniqueKey, [Type | Tail]) ->
-    io:format("UniqueKey=~p, Type=~p~n", [UniqueKey, Type]),
-    [{{UniqueKey, Type}, Value}] = ets:lookup('Types', {UniqueKey, Type}),
-    [{Type, Value} | get_values(UniqueKey, Tail)].
+    case ets:lookup('Types', {UniqueKey, Type}) of
+        [] ->
+            get_values(UniqueKey, Tail);
+
+        [{{UniqueKey, Type}, Value}] ->
+            [{Type, Value} | get_values(UniqueKey, Tail)]
+    end.
 
 
 call(Module, Key0, Key1, TypeList) ->
@@ -180,6 +191,9 @@ call(Ref, List) ->
         {Ref, {'get-reply', ValueList}} ->
             call(Ref, [ValueList | List]);
         {Ref, {'get-end'}} ->
+            List
+    after
+        1500 ->
             List
     end.
 
