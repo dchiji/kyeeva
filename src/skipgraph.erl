@@ -127,7 +127,7 @@ init(Arg) ->
 %%--------------------------------------------------------------------
 handle_call({peer, random}, _From, State) ->
     [{SelfKey, {_, _, _}} | _] = ets:tab2list('Peer'),
-    {reply, {whereis(?MODULE), SelfKey}, State};
+    {reply, {self(), SelfKey}, State};
 
 
 %%--------------------------------------------------------------------
@@ -194,6 +194,7 @@ handle_call({'select-first-peer', _NewKey},
     [InitialNode | Tail]) ->
 
     PeerList = ets:tab2list('Peer'),
+    Self = self(),
 
     case PeerList of
         [] ->
@@ -208,7 +209,7 @@ handle_call({'select-first-peer', _NewKey},
 
         _ ->
             [{SelfKey, {_, _, _}} | _] = PeerList,
-            gen_server:reply(From, {ok, {whereis(?MODULE), SelfKey}})
+            gen_server:reply(From, {ok, {Self, SelfKey}})
     end,
 
     {noreply, [InitialNode | Tail]};
@@ -219,8 +220,10 @@ handle_call({SelfKey, {'join-process-0', {Server, NewKey, MembershipVector}}, Le
     From,
     State) ->
 
+    Self = self(),
+
     spawn(fun() ->
-                gen_server:call(whereis(?MODULE),
+                gen_server:call(Self,
                     {SelfKey,
                         {'join-process-0',
                             {From,
@@ -274,8 +277,10 @@ handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MembershipVecto
     From,
     State) ->
 
+    Self = self(),
+
     spawn(fun() ->
-                gen_server:call(whereis(?MODULE),
+                gen_server:call(Self,
                     {SelfKey,
                         {'join-process-0-oneway',
                             {From,
@@ -328,6 +333,8 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     _From,
     State) ->
 
+    Self = self(),
+
     F = fun() ->
             Ref = make_ref(),
             util:update(SelfKey, {Server, NewKey}, Level),
@@ -337,13 +344,13 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
                     gen_server:reply(From,
                         {ok,
                             {Other,
-                                {whereis(?MODULE), SelfKey}},
+                                {Self, SelfKey}},
                             {self(), Ref}});
 
                 SelfKey < NewKey ->
                     gen_server:reply(From,
                         {ok,
-                            {{whereis(?MODULE), SelfKey},
+                            {{Self, SelfKey},
                                 Other},
                             {self(), Ref}})
             end,
@@ -374,8 +381,10 @@ handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level},
     From,
     State) ->
 
+    Self = self(),
+
     spawn(fun() ->
-                gen_server:call(whereis(?MODULE),
+                gen_server:call(Self,
                     {SelfKey,
                         {'remove-process-0',
                             {From,
@@ -406,8 +415,10 @@ handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level},
     From,
     State) ->
 
+    Self = self(),
+
     spawn(fun() ->
-                gen_server:call(whereis(?MODULE),
+                gen_server:call(Self,
                     {SelfKey,
                         {'remove-process-1',
                             {From,
