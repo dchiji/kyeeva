@@ -7,10 +7,12 @@
 
 benchmark() ->
     {ok, Server} = skipgraph:start('__none__'),
-
     put_test(),
-    prof(Server),
-%    io:format("~p~n", [timer:tc(benchmark, get_test, [])]),
+
+    %eprof(Server),
+    fprof(Server),
+    %cprof(),
+    %io:format("~p~n", [timer:tc(benchmark, get_test, [])]),
 
     timer:sleep(infinity).
 
@@ -32,12 +34,19 @@ get_test() ->
 get_test(0) ->
     true;
 get_test(N) ->
-    %skipgraph:get({type, random:uniform(?MAX)}, {type, random:uniform(?MAX)}, [type]),
-    skipgraph:get({type, random:uniform(?MAX)}, [type]),
+    skipgraph:get({type, random:uniform(?MAX)}, {type, random:uniform(?MAX)}, [type]),
+    %skipgraph:get({type, random:uniform(?MAX)}, [type]),
     get_test(N - 1).
 
 
-prof(Server) ->
+eprof(Server) ->
+    eprof:start(),
+    eprof:profile([], ?MODULE, get_test, []),
+    eprof:analyse(),
+    eprof:stop().
+
+
+fprof(Server) ->
     fprof:start(),
     %fprof:apply(?MODULE, get_test, []),
 
@@ -48,3 +57,11 @@ prof(Server) ->
     fprof:profile(),
     fprof:analyse(),
     fprof:stop().
+
+cprof() ->
+    cprof:start(),
+    get_test(),
+    cprof:pause(),
+    io:format("~n~n~p~n", [cprof:analyse()]),
+    cprof:stop().
+

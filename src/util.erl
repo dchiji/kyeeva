@@ -220,11 +220,14 @@ update(SelfKey, {Server, NewKey}, Level) ->
 
 select_best([], _, _) ->
     {'__none__', '__none__'};
+
 select_best([{'__none__', '__none__'} | _], _, _) ->
     {'__none__', '__none__'};
+
 select_best([{Node0, Key0} | _], Key, _)
 when Key0 == Key ->
     {Node0, Key0};
+
 select_best([{Node0, Key0}], Key, S_or_B)
 when S_or_B == smaller ->
     if
@@ -233,6 +236,7 @@ when S_or_B == smaller ->
         true ->
             {Node0, Key0}
     end;
+
 select_best([{Node0, Key0}], Key, S_or_B)
 when S_or_B == bigger ->
     if
@@ -241,6 +245,7 @@ when S_or_B == bigger ->
         true ->
             {Node0, Key0}
     end;
+
 select_best([{Node0, Key0}, {'__none__', '__none__'} | _], Key, S_or_B)
 when S_or_B == smaller ->
     if
@@ -249,6 +254,7 @@ when S_or_B == smaller ->
         true ->
             {Node0, Key0}
     end;
+
 select_best([{Node0, Key0}, {'__none__', '__none__'} | _], Key, S_or_B)
 when S_or_B == bigger ->
     if
@@ -257,9 +263,11 @@ when S_or_B == bigger ->
         true ->
             {Node0, Key0}
     end;
+
 select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
-when {Node0, Key0} == {Node1, Key1} ->    % rotate
+when Key0 == Key1 ->    % rotate
     select_best([{Node1, Key1} | Tail], Key, S_or_B);
+
 select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
 when S_or_B == smaller ->
     if
@@ -270,6 +278,7 @@ when S_or_B == smaller ->
         Key < Key0 ->
             select_best([{Node1, Key1} | Tail], Key, S_or_B)
     end;
+
 select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B)
 when S_or_B == bigger ->
     if

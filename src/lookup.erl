@@ -161,10 +161,15 @@ process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
                 {'__none__', '__none__'} ->
                     From ! {Ref, {'get-end'}};
                 _ ->
-                    gen_server:call(NextNode,
-                        {NextKey,
-                            {'lookup-process-1',
-                                {Key0, Key1, TypeList, {Ref, From}}}})
+                    if
+                        NextKey < Key0 orelse Key1 < NextKey ->
+                            From ! {Ref, {'get-end'}};
+                        true ->
+                            gen_server:call(NextNode,
+                                {NextKey,
+                                    {'lookup-process-1',
+                                        {Key0, Key1, TypeList, {Ref, From}}}})
+                    end
             end
     end.
 
