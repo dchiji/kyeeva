@@ -1,5 +1,5 @@
-#ifndef __LIBSHMSL_H__
-#define __LIBSHMSL_H__
+#ifndef __SHMSL_H__
+#define __SHMSL_H__
 
 #define BLOCK_SIZE 24
 #define NEIGHBOR_N 12

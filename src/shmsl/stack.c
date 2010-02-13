@@ -49,23 +49,23 @@ int stack_init(const char *pathname, unsigned int size, stack_header_t **p)
         FILE *fp;
 
         if((fp = fopen(pathname, "r")) == NULL) {
-            printf("[libshmsl/stack_init/fopen]: Identification file <%s> is not found\n", pathname);
+            printf("[shmsl/stack_init/fopen]: Identification file <%s> is not found\n", pathname);
             return -1;
         } else {
             fclose(fp);
         }
     }
     if((key = ftok(pathname, *(int *)"STCK")) == -1) {
-        perror("[libshmsl/stack_init/ftok]");
+        perror("[shmsl/stack_init/ftok]");
         return -1;
     }
 
     if((stack_id = shmget(key, sizeof(stack_header_t) + sizeof(int) * size, IPC_CREAT|S_IRUSR)) == -1){
-        perror("[libshmsl/stack_init/shmget]");
+        perror("[shmsl/stack_init/shmget]");
         return -1;
     }
     if((int)(tmp = (stack_header_t *)shmat(stack_id, NULL, 0)) == -1) {
-        perror("[libshmsl/stack_init/shmat]");
+        perror("[shmsl/stack_init/shmat]");
         return -1;
     }
     tmp->size    = size;
@@ -89,7 +89,7 @@ int stack_push(stack_header_t *header, unsigned int item)
 
     while(!__sync_bool_compare_and_swap(&header->top, top, top + 1)) {
         if((top = header->top) >= size) {
-            printf("[libshmsl/stack_push]: Stack overflow\n");
+            printf("[shmsl/stack_push]: Stack overflow\n");
             return -1;
         }
     }
@@ -106,7 +106,7 @@ unsigned int stack_pop(stack_header_t *header, unsigned int *p)
     unsigned int item = header->stack[top - 1];
 
     if(top == 0) {
-        printf("[libshmsl/stack_pop]: Stack is empty\n");
+        printf("[shmsl/stack_pop]: Stack is empty\n");
         return -1;
     }
 
@@ -117,11 +117,11 @@ unsigned int stack_pop(stack_header_t *header, unsigned int *p)
         do {
             while(!__sync_bool_compare_and_swap(&header->top, top, top - 1)) {
                 if((top = header->top) >= size) {
-                    printf("[libshmsl/stack_pop]: Stack overflow\n");
+                    printf("[shmsl/stack_pop]: Stack overflow\n");
                     return -1;
                 }
                 if(top == 0) {
-                    printf("[libshmsl/stack_pop]: Stack is empty\n");
+                    printf("[shmsl/stack_pop]: Stack is empty\n");
                     return -1;
                 }
                 item = header->stack[top - 1];

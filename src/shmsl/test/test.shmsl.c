@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include <string.h>
-#include "../libshmsl.h"
+#include "../shmsl.h"
 
 int test_strcmp_with_diff()
 {

@@ -39,7 +39,7 @@
 #include <sys/types.h>
 #include <sys/ipc.h>
 
-#include "libshmsl.h"
+#include "shmsl.h"
 #include "stack.h"
 
 shmsl_t *shmsl_init(char *pathname, unsigned int skiplist_size, unsigned int datablock_size)
@@ -49,7 +49,7 @@ shmsl_t *shmsl_init(char *pathname, unsigned int skiplist_size, unsigned int dat
     shmsl_t *info;
     
     if((info = (shmsl_t *)malloc(sizeof(shmsl_t))) == NULL) {
-        printf("[libshmsl/shmsl_init/malloc]: Failed memory allocation\n");
+        printf("[shmsl/shmsl_init/malloc]: Failed memory allocation\n");
         return NULL;
     }
 
@@ -57,7 +57,7 @@ shmsl_t *shmsl_init(char *pathname, unsigned int skiplist_size, unsigned int dat
         FILE *fp;
 
         if((fp = fopen(pathname, "r")) == NULL) {
-            printf("[libshmsl/shmsl_init/fopen]: identification file <%s> is not found.\n", pathname);
+            printf("[shmsl/shmsl_init/fopen]: identification file <%s> is not found.\n", pathname);
             return NULL;
         } else {
             fclose(fp);
@@ -65,19 +65,19 @@ shmsl_t *shmsl_init(char *pathname, unsigned int skiplist_size, unsigned int dat
     }
 
     if((skiplist_key = ftok(pathname, *(int *)"SL  ")) == -1) {
-        perror("[libshmsl/shmsl_init/ftok]");
+        perror("[shmsl/shmsl_init/ftok]");
         return NULL;
     }
     info->skiplist_id = shmget(skiplist_key,
                                sizeof(block_header_t) + sizeof(skiplist_t) * skiplist_size,
                                IPC_CREAT);
     if(info->skiplist_id == -1) {
-        perror("[libshmsl/shmsl_init/shmget]");
+        perror("[shmsl/shmsl_init/shmget]");
         return NULL;
     }
 
     if((signed int)(info->skiplist = (block_header_t *)shmat(info->skiplist_id, 0, 0)) == -1) {
-        perror("[libshmsl/shmsl_init/shmat]");
+        perror("[shmsl/shmsl_init/shmat]");
         return NULL;
     }
     if((info->skiplist->unused_stack_id = stack_init(pathname, skiplist_size, NULL)) == -1) {
@@ -90,19 +90,19 @@ shmsl_t *shmsl_init(char *pathname, unsigned int skiplist_size, unsigned int dat
     info->skiplist->next_id = 0;
 
     if((datablock_key = ftok(pathname, *(int *)"DB  ")) == -1) {
-        perror("[libshmsl/shmsl_init/ftok]");
+        perror("[shmsl/shmsl_init/ftok]");
         return NULL;
     }
     info->datablock_id = shmget(datablock_key,
                                 sizeof(block_header_t) + BLOCK_SIZE * datablock_size,
                                 IPC_CREAT);
     if(info->datablock_id == -1) {
-        perror("[libshmsl/shmsl_init/shmget]");
+        perror("[shmsl/shmsl_init/shmget]");
         return NULL;
     }
 
     if((int)(info->datablock = (block_header_t *)shmat(info->datablock_id, 0, 0)) == -1) {
-        perror("[libshmsl/shmsl_init/shmat]");
+        perror("[shmsl/shmsl_init/shmat]");
         return NULL;
     }
     if((info->datablock->unused_stack_id = stack_init(pathname, datablock_size, NULL)) == -1) {
@@ -212,7 +212,7 @@ unsigned char *shmsl_key(block_header_t *datablock, skiplist_t *node, int new_al
         unsigned char *p = (unsigned char *)malloc(sizeof(char) * key_size);
 
         if(p == NULL) {
-            printf("[libshmsl/shmsl_key/malloc]: Failed memory allocation\n");
+            printf("[shmsl/shmsl_key/malloc]: Failed memory allocation\n");
             return NULL;
         }
 
@@ -242,7 +242,7 @@ unsigned char *shmsl_value(block_header_t *datablock, skiplist_t *node, int new_
         unsigned char *p = (unsigned char *)malloc(data_size);
 
         if(p == NULL) {
-            printf("[libshmsl/shmsl_value/malloc]: Failed memory allocation\n");
+            printf("[shmsl/shmsl_value/malloc]: Failed memory allocation\n");
             return NULL;
         }
 
@@ -257,25 +257,25 @@ skiplist_t *shmsl_get(shmsl_t *info, unsigned char *key, unsigned int key_size)
     skiplist_t *node;
 
     if(info == NULL) {
-        printf("[libshmsl/shmsl_get]: Invalid argument\n");
+        printf("[shmsl/shmsl_get]: Invalid argument\n");
         return NULL;
     }
 
     if(info->tail == 0) {
-        printf("[libshmsl/shmsl_get]: Skip List is empty");
+        printf("[shmsl/shmsl_get]: Skip List is empty");
         return NULL;
     }
 
     if(info->skiplist == NULL) {
         if((int)(info->skiplist = (block_header_t *)shmat(info->skiplist_id, 0, 0)) == -1) {
-            perror("[libshmsl/shmsl_init/shmat]");
+            perror("[shmsl/shmsl_init/shmat]");
             return NULL;
         }
     }
 
     if(info->datablock == NULL) {
         if((int)(info->datablock = (block_header_t *)shmat(info->datablock_id, 0, 0)) == -1) {
-            perror("[libshmsl/shmsl_init/shmat]");
+            perror("[shmsl/shmsl_init/shmat]");
             return NULL;
         }
     }
