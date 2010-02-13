@@ -1,15 +1,16 @@
 -module(benchmark).
 -compile(export_all).
 
--define(GET_N, 1000).
+-define(GET_N, 1).
 -define(MIN, 0).
 -define(MAX, 100).
 
 benchmark() ->
     {ok, Server} = skipgraph:start('__none__'),
     put_test(),
+    skipgraph:test(),
 
-    %eprof(Server),
+    %eprof(),
     fprof(Server),
     %cprof(),
     %io:format("~p~n", [timer:tc(benchmark, get_test, [])]),
@@ -34,12 +35,15 @@ get_test() ->
 get_test(0) ->
     true;
 get_test(N) ->
-    skipgraph:get({type, random:uniform(?MAX)}, {type, random:uniform(?MAX)}, [type]),
+    Key0 = random:uniform(?MAX),
+    Key1 = random:uniform(?MAX),
+    io:format("~n~n~nKey0=~p Key1=~p~n", [Key0, Key1]),
+    io:format("result=~p~n", [skipgraph:get({type, Key0}, {type, Key1}, [type])]),
     %skipgraph:get({type, random:uniform(?MAX)}, [type]),
     get_test(N - 1).
 
 
-eprof(Server) ->
+eprof() ->
     eprof:start(),
     eprof:profile([], ?MODULE, get_test, []),
     eprof:analyse(),
