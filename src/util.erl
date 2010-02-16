@@ -189,22 +189,31 @@ update(SelfKey, {Server, NewKey}, Level) ->
                     NewSmaller = SFront ++ [{Server, NewKey} | STail],
                     NewBigger = BFront ++ [{Server, NewKey} | BTail],
 
-                    io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
+                    %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
                     {ok, {SelfKey, {Value, MembershipVector, {NewSmaller, NewBigger}}}};
 
                 NewKey < SelfKey ->
                     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
 
                     NewSmaller = Front ++ [{Server, NewKey} | Tail],
-                    io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
+                    %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
                     {ok, {SelfKey, {Value, MembershipVector, {NewSmaller, Bigger}}}};
 
+                %SelfKey =< NewKey ->
                 SelfKey < NewKey ->
                     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
 
                     NewBigger = Front ++ [{Server, NewKey} | Tail],
-                    io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, bigger]),
-                    {ok, {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}}}
+                    %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, bigger]),
+                    {ok, {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}}};
+
+                SelfKey == NewKey ->
+                    io:format("~n~n~noutput information~n~n"),
+
+                    io:format("~p: ~p~n", [SelfKey, ets:lookup('Peer', SelfKey)]),
+                    io:format("~p: ~p~n", [NewKey, ets:lookup('Peer', NewKey)]),
+
+                    timer:stop(infinity)
             end
     end,
 
@@ -294,7 +303,9 @@ when S_or_B == bigger ->
 %% MembershipVectorを生成する
 
 make_membership_vector() ->
-    {A1, A2, A3} = now(),
+    {_, _, A1} = now(),
+    {_, _, A2} = now(),
+    {_, _, A3} = now(),
     random:seed(A1, A2, A3),
 
     N = random:uniform(256) - 1,

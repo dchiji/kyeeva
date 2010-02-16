@@ -58,33 +58,33 @@
 start(Initial) ->
     case Initial of
         '__none__' ->
-            %gen_server:start_link(
-            %    {local, ?MODULE},
-            %    ?MODULE,
-            %    ['__none__',
-            %        util:make_membership_vector()],
-            %    [{debug, [trace, log]}]);
             gen_server:start_link(
                 {local, ?MODULE},
                 ?MODULE,
                 ['__none__',
                     util:make_membership_vector()],
-                []);
-
-        _ ->
-            InitialNode = rpc:call(Initial, skipgraph, get_server, []),
+                [{debug, [trace, log]}]);
             %gen_server:start_link(
             %    {local, ?MODULE},
             %    ?MODULE,
-            %    [InitialNode,
+            %    ['__none__',
             %        util:make_membership_vector()],
-            %    [{debug, [trace, log]}])
+            %    []);
+
+        _ ->
+            InitialNode = rpc:call(Initial, skipgraph, get_server, []),
             gen_server:start_link(
                 {local, ?MODULE},
                 ?MODULE,
                 [InitialNode,
                     util:make_membership_vector()],
-                [])
+                [{debug, [trace, log]}])
+            %gen_server:start_link(
+            %    {local, ?MODULE},
+            %    ?MODULE,
+            %    [InitialNode,
+            %        util:make_membership_vector()],
+            %    [])
     end.
 
 

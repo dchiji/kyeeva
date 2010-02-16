@@ -49,7 +49,7 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level)
 when Level > 0 andalso SelfKey == NewKey ->
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, {join, -1}}] ->
-            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
+            %io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
             spawn(fun() ->
                         timer:sleep(2),
@@ -87,7 +87,7 @@ when Level > 0 andalso SelfKey == NewKey ->
 process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, {join, -1}}] ->
-            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
+            %io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
             spawn(fun() ->
                         timer:sleep(2),
@@ -179,7 +179,6 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                                 _ ->
                                     util:select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B)
                             end,
-                            %io:format("BestKey=~p~n", [BestKey]),
 
                             case BestPeer of
                                 {'__none__', '__none__'} ->
@@ -220,7 +219,7 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 %% MembershipVector[Level]が一致するピアを外側に向かって探索．
 %% 成功したら自身のNeighborをutil:updateし，Anotherにもutil:updateメッセージを送信する．
 process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
-    io:format("join:process_1: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
+    %io:format("join:process_1: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
@@ -256,7 +255,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                         %                Level})
                         %    end)
                         _ ->
-                            io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
+                            %io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
                             [{{SelfKey, MaxLevel}, Daemon}] = ets:lookup('Joining-Wait', {SelfKey, MaxLevel}),
  
                             Ref = make_ref(),
@@ -293,7 +292,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 
                     case lists:nth(Level + 1, Neighbor) of
                         {'__none__', '__none__'} ->
-                            io:format("util:update0, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, {'__none__', '__none__'}, NewKey]),
+                            %io:format("util:update0, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, {'__none__', '__none__'}, NewKey]),
 
                             gen_server:reply(From, Reply),
 
@@ -350,7 +349,7 @@ process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                             case OtherNode of
                                 % 自分自身の場合，直接update関数を呼び出す
                                 Self ->
-                                    io:format("update1, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, OtherKey, NewKey]),
+                                    %io:format("update1, SelfKey=~p, OtherKey=~p, NewKey=~p~n", [SelfKey, OtherKey, NewKey]),
 
                                     Update = fun() ->
                                             util:update(SelfKey, {Server, NewKey}, Level),
@@ -428,7 +427,7 @@ process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level)
 when Level > 0 andalso SelfKey == NewKey ->
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, {join, -1}}] ->
-            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
+            %io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
             spawn(fun() ->
                         timer:sleep(2),
@@ -466,7 +465,7 @@ when Level > 0 andalso SelfKey == NewKey ->
 process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     case ets:lookup('Incomplete', SelfKey) of
         [{SelfKey, {join, -1}}] ->
-            io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
+            %io:format("~n~nrecall SelfKey=~p, NewKey=~p~n~n", [SelfKey, NewKey]),
 
             spawn(fun() ->
                         timer:sleep(2),
@@ -601,7 +600,7 @@ process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 %% process_0_oneway/3関数から呼び出される．
 %% 基本はprocess_1/3関数と同じだが，片方向にしか探索しない．
 process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
-    io:format("join:process_1_oneway: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
+    %io:format("join:process_1_oneway: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
     [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
@@ -635,7 +634,7 @@ process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                         %                    Level})
                         %    end)
                         _ ->
-                            io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
+                            %io:format("~n~n__incomplete_error__ SelfKey=~p, NewKey=~p, Level=~p~n~n", [SelfKey, NewKey, Level]),
                             [{{SelfKey, MaxLevel}, Daemon}] = ets:lookup('Joining-Wait', {SelfKey, MaxLevel}),
  
                             Ref = make_ref(),
