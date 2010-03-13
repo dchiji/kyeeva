@@ -64,7 +64,7 @@ when Level > 0 andalso SelfKey == NewKey ->
                 end);
 
         _ ->
-            [{SelfKey, {_, _, {Smaller, _}}}] = ets:lookup('Peer', SelfKey),
+            [{SelfKey, {_, {Smaller, _}}}] = ets:lookup('Peer', SelfKey),
 
             case lists:nth(Level, Smaller) of
                 {'__none__', '__none__'} ->
@@ -102,7 +102,7 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                 end);
 
         _ ->
-            [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+            [{SelfKey, {_, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
             {Neighbor, S_or_B} = if
                 NewKey < SelfKey ->
@@ -220,7 +220,7 @@ process_0(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 %% 成功したら自身のNeighborをutil:updateし，Anotherにもutil:updateメッセージを送信する．
 process_1(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     %io:format("join:process_1: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
-    [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+    [{SelfKey, {SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
     <<_:TailN, Bit:1, _:Level>> = MembershipVector,
@@ -442,7 +442,7 @@ when Level > 0 andalso SelfKey == NewKey ->
                 end);
 
         _ ->
-            [{SelfKey, {_, _, {Smaller, _}}}] = ets:lookup('Peer', SelfKey),
+            [{SelfKey, {_, {Smaller, _}}}] = ets:lookup('Peer', SelfKey),
 
             case lists:nth(Level, Smaller) of
                 {'__none__', '__none__'} ->
@@ -480,7 +480,7 @@ process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
                 end);
 
         _ ->
-            [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+            [{SelfKey, {_, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
             {Neighbor, S_or_B} = if
                 NewKey < SelfKey ->
@@ -601,7 +601,7 @@ process_0_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
 %% 基本はprocess_1/3関数と同じだが，片方向にしか探索しない．
 process_1_oneway(SelfKey, {From, Server, NewKey, MembershipVector}, Level) ->
     %io:format("join:process_1_oneway: SelfKey=~p, NewKey=~p, Level=~p~n", [SelfKey, NewKey, Level]),
-    [{SelfKey, {_, SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+    [{SelfKey, {SelfMembershipVector, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
     <<_:TailN, Bit:1, _:Level>> = MembershipVector,

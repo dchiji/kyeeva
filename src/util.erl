@@ -129,8 +129,8 @@ lock_join_callback({{From, Ref}, {update, F}}) ->
 
 %% 任意のキーに対してlock_daemonプロセスを生成し，ロックされた安全なupdateを行う
 
-lock_update({Type, Value}, F) ->
-    lock_update('Peer', {Type, Value}, F).
+lock_update(Key, F) ->
+    lock_update('Peer', Key, F).
 
 lock_update(Table, Key, F) ->
     Ref = make_ref(),
@@ -179,7 +179,7 @@ lock_update_callback({{From, Ref}, {update, Table, {Key, F}}}) ->
 
 %% lock_updateを利用してNeighbor[Level]を更新する
 update(SelfKey, {Server, NewKey}, Level) ->
-    F = fun([{_, {Value, MembershipVector, {Smaller, Bigger}}}]) ->
+    F = fun([{_, {MembershipVector, {Smaller, Bigger}}}]) ->
             io:format("NewKey=~p  SelfKey=~p~n", [NewKey, SelfKey]),
             if
                 {Server, NewKey} == {'__none__', '__none__'} ->
@@ -190,14 +190,14 @@ update(SelfKey, {Server, NewKey}, Level) ->
                     NewBigger = BFront ++ [{Server, NewKey} | BTail],
 
                     %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
-                    {ok, {SelfKey, {Value, MembershipVector, {NewSmaller, NewBigger}}}};
+                    {ok, {SelfKey, {MembershipVector, {NewSmaller, NewBigger}}}};
 
                 NewKey < SelfKey ->
                     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
 
                     NewSmaller = Front ++ [{Server, NewKey} | Tail],
                     %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
-                    {ok, {SelfKey, {Value, MembershipVector, {NewSmaller, Bigger}}}};
+                    {ok, {SelfKey, {MembershipVector, {NewSmaller, Bigger}}}};
 
                 %SelfKey =< NewKey ->
                 SelfKey < NewKey ->
@@ -205,15 +205,14 @@ update(SelfKey, {Server, NewKey}, Level) ->
 
                     NewBigger = Front ++ [{Server, NewKey} | Tail],
                     %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, bigger]),
-                    {ok, {SelfKey, {Value, MembershipVector, {Smaller, NewBigger}}}};
+                    {ok, {SelfKey, {MembershipVector, {Smaller, NewBigger}}}};
 
                 SelfKey == NewKey ->
                     io:format("~n~n~noutput information~n~n"),
-
                     io:format("~p: ~p~n", [SelfKey, ets:lookup('Peer', SelfKey)]),
-                    io:format("~p: ~p~n", [NewKey, ets:lookup('Peer', NewKey)]),
 
-                    timer:stop(infinity)
+                    %timer:stop(infinity)
+                    {ok, {SelfKey, {MembershipVector, {Smaller, Bigger}}}}
             end
     end,
 

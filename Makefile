@@ -1,10 +1,10 @@
 .SUFFIXES: .erl .beam .yrl
 
 .erl.beam:
-	erlc -W +'{parse_transform, smart_exceptions}' $<
+	erlc -W +native +'{parse_transform, smart_exceptions}' $<
 
 .yrl.erl:
-	erlc -W +'{parse_transform, smart_exceptions}' $<
+	erlc -W +native +'{parse_transform, smart_exceptions}' $<
 
 ERL = erl 
 
@@ -24,4 +24,4 @@ benchmark: compile
 	${ERL} -sname benchmark +P 4000000 -s benchmark benchmark
 
 clean:
-	cd ebin; rm -rf *.beam erl_crash.dump; cd ..
+	rm -rf *.beam erl_crash.dump

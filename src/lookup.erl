@@ -58,7 +58,7 @@ lookup(InitialNode, Key0, Key1, TypeList, From) ->
             end;
 
         _ ->
-            [{SelfKey, {_, _, _}} | _] = PeerList,
+            [{SelfKey, {_, _}} | _] = PeerList,
             gen_server:call(?SERVER_MODULE,
                 {SelfKey,
                     {'lookup-process-0',
@@ -67,12 +67,14 @@ lookup(InitialNode, Key0, Key1, TypeList, From) ->
 
 
 process_0(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
-    [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
+    [{SelfKey, {_, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     {Neighbor, S_or_B} = if
         Key0 =< SelfKey -> {Smaller, smaller};
         SelfKey < Key0 -> {Bigger, bigger}
     end,
+
+    io:format("Neighbor = ~p~n", [Neighbor]),
 
     case util:select_best(Neighbor, Key0, S_or_B) of
         % 最適なピアが見つかったので、次のフェーズ(lookup-process-1)へ移行
@@ -131,7 +133,7 @@ process_0(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
 process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
     if
         SelfKey < Key0 ->
-            [{SelfKey, {_, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+            [{SelfKey, {_, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
             case {NextNode, NextKey} of
                 {'__none__', '__none__'} ->
                     From ! {Ref, {'get-end'}};
@@ -146,7 +148,7 @@ process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
             From ! {Ref, {'get-end'}};
 
         true ->
-            [{SelfKey, {UniqueKey, _, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+            [{{SelfKey, UniqueKey}, {_, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
 
             ValueList = case TypeList of
                 [] ->
