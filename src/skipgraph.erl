@@ -57,17 +57,17 @@
 %%--------------------------------------------------------------------
 start(Initial) ->
     case Initial of
-        '__none__' ->
+        nil ->
             gen_server:start_link(
                 {local, ?MODULE},
                 ?MODULE,
-                ['__none__',
+                [nil,
                     util:make_membership_vector()],
                 [{debug, [trace, log]}]);
             %gen_server:start_link(
             %    {local, ?MODULE},
             %    ?MODULE,
-            %    ['__none__',
+            %    [nil,
             %        util:make_membership_vector()],
             %    []);
 
@@ -166,7 +166,7 @@ handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, TypeList, From}}},
     spawn(fun() ->
                 lookup:process_0(SelfKey, Key0, Key1, TypeList, From)
         end),
-    {reply, '__none__', State};
+    {reply, nil, State};
 
 
 %% 指定された範囲内を走査し，値を収集する．
@@ -191,9 +191,9 @@ handle_call({'select-first-peer', _NewKey},
     case PeerList of
         [] ->
             case InitialNode of
-                '__none__' ->
+                nil ->
                     gen_server:reply(From,
-                        {ok, {'__none__', '__none__'}});
+                        {ok, {nil, nil}});
                 _ ->
                     {_, Key} = gen_server:call(InitialNode, {peer, random}),
                     gen_server:reply(From, {ok, {InitialNode, Key}})
@@ -261,7 +261,7 @@ handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MembershipVector
     end,
 
     util:lock_join(SelfKey, F),
-    {reply, '__none__', State};
+    {reply, nil, State};
 
 
 %% join-process-0-onewayにFromを渡して再度呼び出す．
@@ -317,7 +317,7 @@ handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, Membershi
     end,
 
     util:lock_join(SelfKey, F),
-    {reply, '__none__', State};
+    {reply, nil, State};
 
 
 %% ローカルで呼び出すことはない．Neighborをupdateする．
@@ -365,7 +365,7 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     end,
 
     util:lock_join(SelfKey, F),
-    {reply, '__none__', State};
+    {reply, nil, State};
 
 
 %% remove-process-0にFromを渡して再度呼ぶ．
@@ -399,7 +399,7 @@ handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level},
     end,
 
     util:lock_join(SelfKey, F),
-    {reply, '__none__', State};
+    {reply, nil, State};
 
 
 %% remove-process-1にFromを渡して再度呼ぶ．
@@ -434,7 +434,7 @@ handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
     end,
 
     util:lock_join(SelfKey, F),
-    {reply, '__none__', State};
+    {reply, nil, State};
 
 
 %% ネットワーク先ノードから呼び出されるために存在する．
@@ -452,7 +452,7 @@ handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Lev
     end,
 
     util:lock_join(SelfKey, F),
-    {reply, '__none__', State};
+    {reply, nil, State};
 
 
 %% ネットワーク先ノードから呼び出されるために存在する．
@@ -462,7 +462,7 @@ handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Lev
     State) ->
 
     remove:process_3(SelfKey, {From, RemovedKey}, NewNeighbor, Level),
-    {reply, '__none__', State}.
+    {reply, nil, State}.
 
 
 %% gen_server内でエラーが発生したとき，再起動させる．
@@ -497,7 +497,7 @@ code_change(_OldVsn, State, _NewVsn) ->
 %% 新しいピアをjoinする
 
 join(Key) ->
-    join(Key, '__none__').
+    join(Key, nil).
 
 join(UniqueKey, {Type, Key}) ->
     case ets:lookup('Peer', {{Type, Key}, UniqueKey}) of
@@ -506,8 +506,8 @@ join(UniqueKey, {Type, Key}) ->
 
         [] ->
             MembershipVector = util:make_membership_vector(),
-            Neighbor = {lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'}),
-                lists:duplicate(?LEVEL_MAX, {'__none__', '__none__'})},
+            Neighbor = {lists:duplicate(?LEVEL_MAX, {nil, nil}),
+                lists:duplicate(?LEVEL_MAX, {nil, nil})},
 
             InitTables = fun() ->
                     ets:insert('Peer',
@@ -531,7 +531,7 @@ join(UniqueKey, {Type, Key}) ->
             end,
 
             case gen_server:call(whereis(?MODULE), {'select-first-peer', {{Type, Key}, UniqueKey}}) of
-                {ok, {'__none__', '__none__'}} ->
+                {ok, {nil, nil}} ->
                     InitTables();
 
                 {ok, InitPeer} ->
@@ -567,7 +567,7 @@ join(UniqueKey, {Type, Key}) ->
 
 
 join(InitPeer, Key, MembershipVector) ->
-    join(InitPeer, Key, MembershipVector, 0, {'__none__', '__none__'}).
+    join(InitPeer, Key, MembershipVector, 0, {nil, nil}).
 
 join(_, Key, _, ?LEVEL_MAX, _) ->
     F = fun(Item) ->
@@ -602,7 +602,7 @@ join({InitNode, InitKey}, NewKey, MembershipVector, Level, OtherPeer) ->
             pass;
             %join_delete_if_exist(Node, Key, ['Incomplete', 'Lock-Join-Daemon', 'Lock-Update-Daemon', 'Peer']);
 
-        {ok, {{'__none__', '__none__'}, {'__none__', '__none__'}}, _} ->
+        {ok, {{nil, nil}, {nil, nil}}, _} ->
             F = fun(Item) ->
                     case Item of
                         [] ->
@@ -615,7 +615,7 @@ join({InitNode, InitKey}, NewKey, MembershipVector, Level, OtherPeer) ->
             end,
             util:lock_update('Incomplete', NewKey, F);
 
-        {ok, {{'__none__', '__none__'}, BiggerPeer}, {Pid, Ref}} ->
+        {ok, {{nil, nil}, BiggerPeer}, {Pid, Ref}} ->
             io:format("~nBiggerPeer=~p~n", [BiggerPeer]),
 
             util:update(NewKey, BiggerPeer, Level),
@@ -642,7 +642,7 @@ join({InitNode, InitKey}, NewKey, MembershipVector, Level, OtherPeer) ->
 
             join_oneway(BiggerPeer, NewKey, MembershipVector, Level + 1);
 
-        {ok, {SmallerPeer, {'__none__', '__none__'}}, {Pid, Ref}} ->
+        {ok, {SmallerPeer, {nil, nil}}, {Pid, Ref}} ->
             io:format("~nSmallerPeer=~p~n", [SmallerPeer]),
 
             util:update(NewKey, SmallerPeer, Level),
@@ -699,7 +699,7 @@ join({InitNode, InitKey}, NewKey, MembershipVector, Level, OtherPeer) ->
 
         {error, mismatch} ->
             case OtherPeer of
-                {'__none__', '__none__'} ->
+                {nil, nil} ->
                     F = fun(Item) ->
                             case Item of
                                 [] ->
@@ -722,7 +722,7 @@ join({InitNode, InitKey}, NewKey, MembershipVector, Level, OtherPeer) ->
     end.
 
 
-%% 一方のNeighborが'__none__'のとき，もう一方のNeighborを通して新たなピアをjoinする
+%% 一方のNeighborがnilのとき，もう一方のNeighborを通して新たなピアをjoinする
 
 join_oneway(_, Key, _, ?LEVEL_MAX) ->
     F = fun(Item) ->
@@ -758,7 +758,7 @@ join_oneway({InitNode, InitKey}, NewKey,  MembershipVector, Level) ->
             pass;
             %join_delete_if_exist(Node, Key, Value, ['Peer', 'Incomplete']);
 
-        {ok, {'__none__', '__none__'}, _} ->
+        {ok, {nil, nil}, _} ->
             F = fun(Item) ->
                     case Item of
                         [] ->
@@ -855,7 +855,7 @@ remove(Key, Level) ->
             {error, 'already-removing'};
 
         {ok, removed} ->
-            util:update(Key, {'__none__', '__none__'}, Level),
+            util:update(Key, {nil, nil}, Level),
 
             F = fun([{Key, {{join, _N}, {remove, Level}}}]) ->
                     {ok, {Key, {{join, _N}, {remove, Level - 1}}}}
