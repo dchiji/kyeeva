@@ -37,7 +37,7 @@
         lock/4,
         set_neighbor/3]).
 
--define(NUM_OF_LOCK_process, 10).
+-define(NUM_OF_LOCK_PROCESS, 10).
 -define(JOIN_LOCK_TABLE, 'Lock-Join-Daemon').
 -define(ETS_LOCK_TABLE, 'Lock-Update-Daemon').
 
@@ -111,7 +111,7 @@ ets_lock(Table, Key, F) ->
 
 lock(DaemonTable, Key, Callback, Args) ->
     Ref  = make_ref(),
-    Hash = erlang:phash2(Key, ?NUM_OF_LOCK_process),
+    Hash = erlang:phash2(Key, ?NUM_OF_LOCK_PROCESS),
     case ets:lookup(DaemonTable, Hash) of
         [] ->
             %% it never match this
