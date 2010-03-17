@@ -31,7 +31,7 @@
 
 %% ETS transaction
 -export([lock_daemon/0,
-        lock_update_callback/3,
+        lock_daemon_callback_ets_lock/3,
         join_lock/2,
         ets_lock/3,
         lock/4,
@@ -87,19 +87,19 @@ lock_daemon() ->
     end,
     lock_daemon().
 
-lock_update_callback(Table, Key, F) ->
+lock_daemon_callback_ets_lock(Table, Key, F) ->
     [Item] = ets:lookup(Table, Key),
-    lock_update_callback_1(Table, F(Item)).
+    lock_daemon_callback_ets_lock_1(Table, F(Item)).
 
-lock_update_callback_1(Table, {ok, Result}) ->
+lock_daemon_callback_ets_lock_1(Table, {ok, Result}) ->
     ets:insert(Table, Result),
     {ok, Result};
-lock_update_callback_1(Table, {delete, DeletedKey}) ->
+lock_daemon_callback_ets_lock_1(Table, {delete, DeletedKey}) ->
     ets:delete(Table, DeletedKey),
     {ok, DeletedKey};
-lock_update_callback_1(_, {error, Reason}) ->
+lock_daemon_callback_ets_lock_1(_, {error, Reason}) ->
     {error, Reason};
-lock_update_callback_1(_, {pass}) ->
+lock_daemon_callback_ets_lock_1(_, {pass}) ->
     {ok, []}.
 
 
@@ -107,7 +107,7 @@ join_lock(Key, Callback) ->
     lock(?JOIN_LOCK_TABLE, Key, Callback, []).
 
 ets_lock(Table, Key, F) ->
-    lock(?ETS_LOCK_TABLE, Key, fun lock_update_callback/3, [Table, Key, F]).
+    lock(?ETS_LOCK_TABLE, Key, fun lock_daemon_callback_ets_lock/3, [Table, Key, F]).
 
 lock(DaemonTable, Key, Callback, Args) ->
     Ref  = make_ref(),
