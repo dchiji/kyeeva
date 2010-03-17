@@ -1,174 +1,154 @@
+%%    Copyright 2009~2010  CHIJIWA Daiki <daiki41@gmail.com>
+%%    
+%%    Redistribution and use in source and binary forms, with or without
+%%    modification, are permitted provided that the following conditions
+%%    are met:
+%%    
+%%         1. Redistributions of source code must retain the above copyright
+%%            notice, this list of conditions and the following disclaimer.
+%%    
+%%         2. Redistributions in binary form must reproduce the above copyright
+%%            notice, this list of conditions and the following disclaimer in
+%%            the documentation and/or other materials provided with the
+%%            distribution.
+%%    
+%%    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+%%    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+%%    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+%%    FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE FREEBSD
+%%    PROJECT OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+%%    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+%%    TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR 
+%%    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF 
+%%    LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING 
+%%    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
+%%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--module(ets_lock).
--export([]).
+-module(util_transaction).
+
+%% process transaction
+-export([wait_trap/1]).
+
+%% ETS transaction
+-export([lock_daemon/0,
+        lock_update_callback/3,
+        join_lock/2,
+        ets_lock/3,
+        lock/4,
+        set_neighbor/3]).
+
+-define(NUM_OF_LOCK_process, 10).
+-define(JOIN_LOCK_TABLE, 'Lock-Join-Daemon').
+-define(ETS_LOCK_TABLE, 'Lock-Update-Daemon').
 
 
 %%====================================================================
-%% Processes Transactions
+%% process Transactions
 %%====================================================================
 
-%% {trap}を受信したら，PListに含まれる全プロセスに{ok, Ref}メッセージを送信する．
+%% when I receive "trap" message, I will send "{ok, Ref}" message to all process I store
 wait_trap(PList) ->
     receive
         {add, {Pid, Ref}} ->
             wait_trap([{Pid, Ref} | PList]);
-        trap ->
-            lists:foreach(fun({Pid, Ref}) ->
-                        Pid ! {ok, Ref}
-                end,
-                PList),
-            wait_trapped({trap});
         {error, Message} ->
-            Message = 
-            lists:foreach(fun({Pid, Ref}) ->
-                        Pid ! {error, Ref, Message}
-                end,
-                PList),
-            wait_trapped({error, Message})
+            lists:foreach(fun({Pid, Ref}) -> Pid ! {error, Ref, Message} end,PList),
+            wait_trap_1({error, Message});
+        trap ->
+            lists:foreach(fun({Pid, Ref}) -> Pid ! {ok, Ref} end, PList),
+            wait_trap_1(trap)
     end.
 
-%% wait_trap/1関数が{trap}を受信した後の処理．
-wait_trapped(Receive) ->
+wait_trap_1(Received) ->
     receive
         {add, {Pid, Ref}} ->
-            case Receive of
-                trap ->
-                    Pid ! {ok, Ref};
-                {error, Message} ->
-                    Pid ! {error, Ref, Message}
-            end
+            wait_trapped_2(Received)
     end,
+    wait_trap_1(Receive).
 
-    wait_trapped(Receive).
+wait_trap_2(Received) ->
+    case Received of
+        trap ->
+            Pid ! {ok, Ref};
+        {error, Message} ->
+            Pid ! {error, Ref, Message}
+    end.
 
 
 %%====================================================================
 %% ETS Transactions
 %%====================================================================
 
-%% キー毎に独立したプロセスとして常駐する
-lock_daemon(F) ->
+%% a daemon process for each hashes
+lock_daemon() ->
     receive
-        Message ->
-            F(Message)
+        {{From, Ref}, Callback, Args} ->
+            From ! {Ref, erlang:apply(Callback, Arg)}
     end,
+    lock_daemon().
 
-    lock_daemon(F).
+lock_update_callback(Table, Key, F) ->
+    [Item] = ets:lookup(Table, Key),
+    lock_update_callback_1(F(Item)).
+
+lock_update_callback_1({ok, Result}) ->
+    ets:insert(Table, Result),
+    {ok, Result};
+lock_update_callback_1({delete, DeletedKey}) ->
+    ets:delete(Table, DeletedKey),
+    {ok, DeletedKey};
+lock_update_callback_1({error, Reason}) ->
+    {error, Reason};
+lcok_update_callback_1({pass}) ->
+    {ok, []}.
 
 
-%% 任意のキーに対してlock_daemonプロセスを生成し，ロックされた安全なjoinを行う
-lock_join(Key, F) ->
-    Ref = make_ref(),
+join_lock(Key, Callback) ->
+    lock(?JOIN_LOCK_TABLE, Key, Callback, []).
 
-    case ets:lookup('Lock-Join-Daemon', Key) of
+ets_lock(Table, Key, F) ->
+    lock(?ETS_LOCK_TABLE, Key, fun lock_update_callback/3, [Table, Key, F]).
+
+lock(DaemonTable, Key, Callback, Args) ->
+    Ref  = make_ref(),
+    Hash = phash2(Key, ?NUM_OF_LOCK_process),
+
+    case ets:lookup(DaemonTable, Hash) of
         [] ->
-            ets:insert('Lock-Join-Daemon',
-                {Key,
-                    spawn(fun() ->
-                                lock_daemon(fun lock_join_callback/1)
-                        end)}),
-
-            [{Key, Daemon}] = ets:lookup('Lock-Join-Daemon', Key),
-            Daemon ! {{self(), Ref}, {update, F}};
-
-        [{Key, Daemon}] ->
-            Daemon ! {{self(), Ref}, {update, F}}
+            %% it never match this
+            ets:insert(DaemonTable, {Hash, spawn(fun lock_daemon/0)}),
+            [{Hash, Daemon}] = ets:lookup(DaemonTable, Hash),
+            Daemon ! {{self(), Ref}, Callback, Args};
+        [{Hash, Daemon}] ->
+            Daemon ! {{self(), Ref}, Callback, Args}
     end,
 
     receive
-        {Ref, ok} -> ok
-    end.
-
-%% lock_daemon用のコールバック関数．安全なjoinを行う
-lock_join_callback({{From, Ref}, {update, F}}) ->
-    F(),
-    From ! {Ref, ok}.
-
-
-%% 任意のキーに対してlock_daemonプロセスを生成し，ロックされた安全なupdateを行う
-
-lock_update(Key, F) ->
-    lock_update('Peer', Key, F).
-
-lock_update(Table, Key, F) ->
-    Ref = make_ref(),
-
-    case ets:lookup('Lock-Update-Daemon', Key) of
-        [] ->
-            ets:insert('Lock-Update-Daemon',
-                {Key,
-                    spawn(fun() ->
-                                lock_daemon(fun lock_update_callback/1)
-                        end)}),
-
-            [{{Table, Key}, Daemon}] = ets:lookup('Lock-Update-Daemon', Key),
-            Daemon ! {{self(), Ref}, {update, Table, {Key, F}}};
-
-        [{Key, Daemon}] ->
-            Daemon ! {{self(), Ref}, {update, Table, {Key, F}}}
-    end,
-
-    receive
-        {Ref, Result} -> Result
-    end.
-
-%% lock_daemon用のコールバック関数．
-%% lock_update関数によって関連づけられる．
-%% ETSテーブルを安全に更新する
-lock_update_callback({{From, Ref}, {update, Table, {Key, F}}}) ->
-    Item = ets:lookup(Table, Key),
-
-    case F(Item) of
-        {ok, Result} ->
-            ets:insert(Table, Result),
-            From ! {Ref, {ok, Result}};
-        {delete, DeletedKey} ->
-            ets:delete(Table, DeletedKey),
-            From ! {Ref, {delete, DeletedKey}};
-        {error, _Reason} ->
-            From ! {Ref, {pass}};
-        {pass} ->
-            From ! {Ref, {ok, []}}
+        {Ref, ok} ->
+            %% receive from Daemon
+            ok
     end.
 
 
-%% lock_updateを利用してNeighbor[Level]を更新する
-update(SelfKey, {Server, NewKey}, Level) ->
-    F = fun([{_, {MembershipVector, {Smaller, Bigger}}}]) ->
-            io:format("NewKey=~p  SelfKey=~p~n", [NewKey, SelfKey]),
-            if
-                {Server, NewKey} == {'__none__', '__none__'} ->
-                    {SFront, [_ | STail]} = lists:split(Level, Smaller),
-                    {BFront, [_ | BTail]} = lists:split(Level, Bigger),
+set_neighbor(Key, {Server, NewKey}, Level) ->
+    New = [{Key, {Server, NewKey}, Level}]
+    ets_lock(peer_table, Key, fun(Old) -> set_neighbor_1(New, Old) end).
 
-                    NewSmaller = SFront ++ [{Server, NewKey} | STail],
-                    NewBigger = BFront ++ [{Server, NewKey} | BTail],
-
-                    %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
-                    {ok, {SelfKey, {MembershipVector, {NewSmaller, NewBigger}}}};
-
-                NewKey < SelfKey ->
-                    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
-
-                    NewSmaller = Front ++ [{Server, NewKey} | Tail],
-                    %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, smaller]),
-                    {ok, {SelfKey, {MembershipVector, {NewSmaller, Bigger}}}};
-
-                %SelfKey =< NewKey ->
-                SelfKey < NewKey ->
-                    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
-
-                    NewBigger = Front ++ [{Server, NewKey} | Tail],
-                    %io:format("update: SelfKey=~p, NewKey=~p, Level=~p  ~p~n", [SelfKey, NewKey, Level, bigger]),
-                    {ok, {SelfKey, {MembershipVector, {Smaller, NewBigger}}}};
-
-                SelfKey == NewKey ->
-                    io:format("~n~n~noutput information~n~n"),
-                    io:format("~p: ~p~n", [SelfKey, ets:lookup('Peer', SelfKey)]),
-
-                    %timer:stop(infinity)
-                    {ok, {SelfKey, {MembershipVector, {Smaller, Bigger}}}}
-            end
-    end,
-
-    lock_update(SelfKey, F).
+set_neighbor_1([New], []) ->
+    {ok, New};
+set_neighbor_1([{Key, {nil, nil}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) ->
+    {SFront, [_ | STail]} = lists:split(Level, Smaller),
+    {BFront, [_ | BTail]} = lists:split(Level, Bigger),
+    NewSmaller = SFront ++ [{nil, nil} | STail],
+    NewBigger  = BFront ++ [{nil, nil} | BTail],
+    {ok, {Key, {MembershipVector, {NewSmaller, NewBigger}}}};
+set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when NewKey < SelfKey ->
+    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
+    NewSmaller = Front ++ [{Server, NewKey} | Tail],
+    {ok, {Key, {MembershipVector, {NewSmaller, Bigger}}}};
+set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when NewKey > SelfKey ->
+    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
+    NewBigger = Front ++ [{Server, NewKey} | Tail],
+    {ok, {Key, {MembershipVector, {Smaller, NewBigger}}}};
+set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when NewKey == SelfKey ->
+    {ok, {Key, {MembershipVector, {Smaller, Bigger}}}}.
