@@ -62,11 +62,11 @@ wait_trap(PList) ->
 wait_trap_1(Received) ->
     receive
         {add, {Pid, Ref}} ->
-            wait_trapped_2(Received)
+            wait_trap_2(Received, Pid, Ref)
     end,
-    wait_trap_1(Receive).
+    wait_trap_1(Received).
 
-wait_trap_2(Received) ->
+wait_trap_2(Received, Pid, Ref) ->
     case Received of
         trap ->
             Pid ! {ok, Ref};
@@ -83,23 +83,23 @@ wait_trap_2(Received) ->
 lock_daemon() ->
     receive
         {{From, Ref}, Callback, Args} ->
-            From ! {Ref, erlang:apply(Callback, Arg)}
+            From ! {Ref, erlang:apply(Callback, Args)}
     end,
     lock_daemon().
 
 lock_update_callback(Table, Key, F) ->
     [Item] = ets:lookup(Table, Key),
-    lock_update_callback_1(F(Item)).
+    lock_update_callback_1(Table, F(Item)).
 
-lock_update_callback_1({ok, Result}) ->
+lock_update_callback_1(Table, {ok, Result}) ->
     ets:insert(Table, Result),
     {ok, Result};
-lock_update_callback_1({delete, DeletedKey}) ->
+lock_update_callback_1(Table, {delete, DeletedKey}) ->
     ets:delete(Table, DeletedKey),
     {ok, DeletedKey};
-lock_update_callback_1({error, Reason}) ->
+lock_update_callback_1(_, {error, Reason}) ->
     {error, Reason};
-lcok_update_callback_1({pass}) ->
+lock_update_callback_1(_, {pass}) ->
     {ok, []}.
 
 
@@ -111,18 +111,19 @@ ets_lock(Table, Key, F) ->
 
 lock(DaemonTable, Key, Callback, Args) ->
     Ref  = make_ref(),
-    Hash = phash2(Key, ?NUM_OF_LOCK_process),
-
+    Hash = erlang:phash2(Key, ?NUM_OF_LOCK_process),
     case ets:lookup(DaemonTable, Hash) of
         [] ->
             %% it never match this
             ets:insert(DaemonTable, {Hash, spawn(fun lock_daemon/0)}),
             [{Hash, Daemon}] = ets:lookup(DaemonTable, Hash),
-            Daemon ! {{self(), Ref}, Callback, Args};
+            lock_1(Daemon, Ref, Callback, Args);
         [{Hash, Daemon}] ->
-            Daemon ! {{self(), Ref}, Callback, Args}
-    end,
+            lock_1(Daemon, Ref, Callback, Args)
+    end.
 
+lock_1(Daemon, Ref, Callback, Args) ->
+    Daemon ! {{self(), Ref}, Callback, Args},
     receive
         {Ref, ok} ->
             %% receive from Daemon
@@ -131,7 +132,7 @@ lock(DaemonTable, Key, Callback, Args) ->
 
 
 set_neighbor(Key, {Server, NewKey}, Level) ->
-    New = [{Key, {Server, NewKey}, Level}]
+    New = [{Key, {Server, NewKey}, Level}],
     ets_lock(peer_table, Key, fun(Old) -> set_neighbor_1(New, Old) end).
 
 set_neighbor_1([New], []) ->
@@ -142,13 +143,13 @@ set_neighbor_1([{Key, {nil, nil}, Level}], [{Key, {MembershipVector, {Smaller, B
     NewSmaller = SFront ++ [{nil, nil} | STail],
     NewBigger  = BFront ++ [{nil, nil} | BTail],
     {ok, {Key, {MembershipVector, {NewSmaller, NewBigger}}}};
-set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when NewKey < SelfKey ->
+set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when Key > NewKey ->
     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Smaller),
     NewSmaller = Front ++ [{Server, NewKey} | Tail],
     {ok, {Key, {MembershipVector, {NewSmaller, Bigger}}}};
-set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when NewKey > SelfKey ->
+set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when Key < NewKey ->
     {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Bigger),
     NewBigger = Front ++ [{Server, NewKey} | Tail],
     {ok, {Key, {MembershipVector, {Smaller, NewBigger}}}};
-set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, {MembershipVector, {Smaller, Bigger}}}]) when NewKey == SelfKey ->
-    {ok, {Key, {MembershipVector, {Smaller, Bigger}}}}.
+set_neighbor_1([{Key, {_, NewKey}, _}], [{Key, {_, {_, _}}}=Old]) when Key == NewKey ->
+    {ok, Old}.
