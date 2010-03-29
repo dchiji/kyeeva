@@ -41,13 +41,13 @@
 
 
 lookup(InitialNode, Key0, Key1, TypeList, From) ->
-    PeerList = ets:tab2list('Peer'),
+    PeerList = ets:tab2list(peer_table),
     case PeerList of
         [] ->
             case InitialNode of
-                '__none__' ->
+                nil ->
                     gen_server:reply(From,
-                        {ok, {'__none__', '__none__'}});
+                        {ok, {nil, nil}});
 
                 _ ->
                     {_, InitKey} = gen_server:call(InitialNode, {peer, random}),
@@ -67,33 +67,23 @@ lookup(InitialNode, Key0, Key1, TypeList, From) ->
 
 
 process_0(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
-    [{SelfKey, {_, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
-
+    [{SelfKey, {_, {Smaller, Bigger}}}] = ets:lookup(peer_table, SelfKey),
     {Neighbor, S_or_B} = if
         Key0 =< SelfKey -> {Smaller, smaller};
         SelfKey < Key0 -> {Bigger, bigger}
     end,
-
-    io:format("Neighbor = ~p~n", [Neighbor]),
-
     case util:select_best(Neighbor, Key0, S_or_B) of
         % 最適なピアが見つかったので、次のフェーズ(lookup-process-1)へ移行
-        {'__none__', '__none__'} ->
-            gen_server:call(?SERVER_MODULE,
-                {SelfKey,
-                    {'lookup-process-1',
-                        {Key0, Key1, TypeList, {Ref, From}}}});
+        {nil, nil} ->
+            gen_server:call(?SERVER_MODULE, {SelfKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}});
         {'__self__'} ->
-            gen_server:call(?SERVER_MODULE,
-                {SelfKey,
-                    {'lookup-process-1',
-                        {Key0, Key1, TypeList, {Ref, From}}}});
+            gen_server:call(?SERVER_MODULE, {SelfKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}});
 
         % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
         {BestNode, Key0} when Key0 == Key1 ->
-            case ets:lookup('ETS-Table', BestNode) of
+            case ets:lookup(lock_ets_table, BestNode) of
                 [{BestNode, Tab}] ->
-                    [{BestNode, Tab} | _] = ets:lookup('ETS-Table', BestNode),
+                    [{BestNode, Tab} | _] = ets:lookup(lock_ets_table, BestNode),
                     case ets:lookup(Tab, Key0) of
                         [{Key0, {UniqueKey, _, _}} | _] ->
                             ValueList = case TypeList of
@@ -102,40 +92,26 @@ process_0(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
                                 _ ->
                                     get_values(UniqueKey, TypeList)
                             end,
-
                             From ! {Ref, {'get-reply', {UniqueKey, ValueList}}},
                             From ! {Ref, {'get-end'}};
-
                         [] ->
                             From ! {Ref, {'get-end'}}
                     end;
-
                 _ ->
-                    spawn(fun() ->
-                                gen_server:call(BestNode,
-                                    {Key0,
-                                        {'lookup-process-0',
-                                            {Key0, Key1, TypeList, {Ref, From}}}})
-                        end)
+                    gen_server:call(BestNode, {Key0, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
             end;
-
         % 最適なピアの探索を続ける(lookup-process-0)
         {BestNode, BestKey} ->
-            spawn(fun() ->
-                        gen_server:call(BestNode,
-                            {BestKey,
-                                {'lookup-process-0',
-                                    {Key0, Key1, TypeList, {Ref, From}}}})
-                end)
+            gen_server:call(BestNode, {BestKey, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
     end.
 
 
 process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
     if
         SelfKey < Key0 ->
-            [{SelfKey, {_, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+            [{SelfKey, {_, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup(peer_table, SelfKey),
             case {NextNode, NextKey} of
-                {'__none__', '__none__'} ->
+                {nil, nil} ->
                     From ! {Ref, {'get-end'}};
                 _ ->
                     gen_server:call(NextNode,
@@ -148,7 +124,7 @@ process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
             From ! {Ref, {'get-end'}};
 
         true ->
-            [{{SelfKey, UniqueKey}, {_, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup('Peer', SelfKey),
+            [{{SelfKey, UniqueKey}, {_, {_, [{NextNode, NextKey} | _]}}}] = ets:lookup(peer_table, SelfKey),
 
             ValueList = case TypeList of
                 [] ->
@@ -160,7 +136,7 @@ process_1(SelfKey, Key0, Key1, TypeList, {Ref, From}) ->
             From ! {Ref, {'get-reply', {UniqueKey, ValueList}}},
 
             case {NextNode, NextKey} of
-                {'__none__', '__none__'} ->
+                {nil, nil} ->
                     From ! {Ref, {'get-end'}};
                 _ ->
                     if

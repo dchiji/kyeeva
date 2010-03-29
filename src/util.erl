@@ -25,18 +25,11 @@
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -module(util).
--export([select_best/3, make_membership_vector/0]).
 
-
-%-define(LEVEL_MAX, 8).
-%-define(LEVEL_MAX, 16).
--define(LEVEL_MAX, 32).
-%-define(LEVEL_MAX, 64).
-%-define(LEVEL_MAX, 128).
+-export([select_best/3]).
 
 %-define(TIMEOUT, 3000).
 -define(TIMEOUT, infinity).
-
 -define(SERVER_MODULE, skipgraph).
 
 
@@ -75,7 +68,7 @@ select_best([{Node0, Key0}, {nil, nil} | _], Key, S_or_B) when S_or_B == bigger 
         true ->
             {Node0, Key0}
     end;
-select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B) when Key0 == Key1 ->    % rotate
+select_best([{_Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B) when Key0 == Key1 ->    % rotate
     select_best([{Node1, Key1} | Tail], Key, S_or_B);
 select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B) when S_or_B == smaller ->
     if
@@ -95,27 +88,3 @@ select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B) when S_or_B == b
         true ->
             select_best([{Node1, Key1} | Tail], Key, S_or_B)
     end.
-
-
-%% MembershipVectorを生成する
-make_membership_vector() ->
-    N = random(),
-    case N rem 2 of
-        1 ->
-            make_membership_vector(<<N>>, ?LEVEL_MAX / 8 - 1);
-        0 ->
-            M = N - 1,
-            make_membership_vector(<<M>>, ?LEVEL_MAX / 8 - 1)
-    end.
-
-make_membership_vector(Bin, 0.0) ->
-    Bin;
-make_membership_vector(Bin, N) ->
-    make_membership_vector(<<(random:uniform(256) - 1):8, Bin/binary>>, N - 1).
-
-random() ->
-    {_, _, A1} = now(),
-    {_, _, A2} = now(),
-    {_, _, A3} = now(),
-    random:seed(A1, A2, A3),
-    random:uniform(256) - 1.
