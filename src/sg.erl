@@ -395,79 +395,60 @@ join(InitPeer, Key, MVector) ->
     join(InitPeer, Key, MVector, 1, {nil, nil}).
 
 join(_, Key, _, ?LEVEL_MAX, _) ->
-    F = fun(Item) ->
-            case Item of
-                [] -> {pass};
-                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                [{Key, _}] -> {delete, Key}
-            end
+    DeleteIncompleteElementCallback = fun
+        ([])                                          -> {pass};
+        ([{Key, {_, {remove, ?LEVEL_MAX}}}])          -> {delete, Key};
+        ([{Key, {{join, JLevel}, {remove, RLevel}}}]) -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
     end,
-    util_lock:ets_lock(incomplete_table, Key, F);
+    util_lock:ets_lock(incomplete_table, Key, DeleteIncompleteElementCallback);
 join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
-    IncrLevel = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
-            case RLevel of
-                ?LEVEL_MAX -> {ok, {Key, {{join, Level}, {remove, RLevel}}}};
-                _          -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
-            end
+    DeleteIncompleteElementCallback = fun
+        ([])                                          -> {pass};
+        ([{Key, {_, {remove, ?LEVEL_MAX}}}])          -> {delete, Key};
+        ([{Key, {{join, JLevel}, {remove, RLevel}}}]) -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
     end,
-    DeleteIncompleteElement = fun(Item) ->
-            case Item of
-                [] ->
-                    {pass};
-                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                [{Key, _}] ->
-                    {delete, Key}
-            end
+    IncrLevelCallback = fun
+        ([{Key, {{join, JLevel}, {remove, ?LEVEL_MAX}}}]) -> {ok, {Key, {{join, Level}, {remove, ?LEVEL_MAX}}}};
+        ([{Key, {{join, JLevel}, {remove, RLevel}}}])     -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
+    end,
+    IncrLevel = fun() -> util_lock:ets_lock(incomplete_table, NewKey, IncrLevelCallback) end,
+    Reply = fun
+        ({ok, {_, {_, {remove, ?LEVEL_MAX}}}}, Pid, Ref) ->
+            Pid ! {ok, Ref},
+            util_lock:wakeup({NewKey, Level});
+        ({ok, {Key, {{join, Level}, {remove, RLevel}}}}, Pid, Ref) ->
+            Pid ! {error, Ref, removing},
+            util_lock:wakeup_with_report({NewKey, Level}, removing)
+    end,
+    JoinProcess = fun
+        ({nil, nil}, {nil, nil}, _, _) ->
+            util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElementCallback),
+            {nil, nil};
+        (SmallerPeer, {nil, nil}, Pid, Ref) ->
+            util_lock:set_neighbor(NewKey, SmallerPeer, Level),
+            Reply(IncrLevel(), Pid, Ref),
+            SmallerPeer;
+        ({nil, nil}, BiggerPeer, Pid, Ref) ->
+            util_lock:set_neighbor(NewKey, BiggerPeer, Level),
+            Reply(IncrLevel(), Pid, Ref),
+            BiggerPeer;
+        (SmallerPeer, BiggerPeer, Pid, Ref) ->
+            util_lock:set_neighbor(NewKey, SmallerPeer, Level),
+            util_lock:set_neighbor(NewKey, BiggerPeer, Level),
+            Reply(IncrLevel(), Pid, Ref),
+            SmallerPeer
     end,
 
     io:format("join ~p~n", [Level]),
     case gen_server:call(InitNode, {InitKey, {'join-process-0', {whereis(?MODULE), NewKey, MVector}}, Level}, ?TIMEOUT) of
         {exist, {Node, Key}} ->
             pass;
-        {ok, {{nil, nil}, {nil, nil}}, _} ->
-            util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElement);
-        {ok, {{nil, nil}, BiggerPeer}, {Pid, Ref}} ->
-            util_lock:set_neighbor(NewKey, BiggerPeer, Level),
-            case util_lock:ets_lock(incomplete_table, NewKey, IncrLevel) of
-                {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
-                    Pid ! {error, Ref, removing},
-                    util_lock:wakeup_with_report({NewKey, Level}, removing);
-                _ ->
-                    Pid ! {ok, Ref},
-                    util_lock:wakeup({NewKey, Level})
-            end,
-            join_oneway(BiggerPeer, NewKey, MVector, Level + 1);
-        {ok, {SmallerPeer, {nil, nil}}, {Pid, Ref}} ->
-            util_lock:set_neighbor(NewKey, SmallerPeer, Level),
-            case util_lock:ets_lock(incomplete_table, NewKey, IncrLevel) of
-                {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
-                    Pid ! {error, Ref, removing},
-                    util_lock:wakeup_with_report({NewKey, Level}, removing);
-                _ ->
-                    io:format("ets_lock ok~n"),
-                    Pid ! {ok, Ref},
-                    util_lock:wakeup({NewKey, Level})
-            end,
-            join_oneway(SmallerPeer, NewKey, MVector, Level + 1);
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
-            util_lock:set_neighbor(NewKey, SmallerPeer, Level),
-            util_lock:set_neighbor(NewKey, BiggerPeer, Level),
-            case util_lock:ets_lock(incomplete_table, NewKey, IncrLevel) of
-                {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
-                    Pid ! {error, Ref, removing},
-                    util_lock:wakeup_with_report({NewKey, Level}, removing);
-                _ ->
-                    Pid ! {ok, Ref},
-                    util_lock:wakeup({NewKey, Level})
-            end,
-            join(SmallerPeer, NewKey, MVector, Level + 1, BiggerPeer);
+            join(JoinProcess(SmallerPeer, BiggerPeer, Pid, Ref), NewKey, MVector, Level + 1, BiggerPeer);
         {error, mismatch} ->
             case OtherPeer of
-                {nil, nil} ->
-                    util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElement);
-                _ ->
-                    join_oneway(OtherPeer, NewKey, MVector, Level)
+                {nil, nil} -> util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElementCallback);
+                _          -> join_oneway(OtherPeer, NewKey, MVector, Level)
             end;
         Message ->
             io:format("*ERR* join/5:unknown message: ~p~n", [Message]),
