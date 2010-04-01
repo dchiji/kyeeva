@@ -64,10 +64,10 @@
 start(Initial) ->
     case Initial of
         nil ->
-            gen_server:start_link( {local, ?MODULE}, ?MODULE, [nil, util:make_membership_vector()], [{debug, [trace, log]}]);
+            gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], []);
         _ ->
             InitialNode = rpc:call(Initial, ?MODULE, get_server, []),
-            gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, util:make_membership_vector()], [{debug, [trace, log]}])
+            gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, util_mvector:make()], [{debug, [trace, log]}])
     end.
 
 
@@ -77,12 +77,12 @@ start(Initial) ->
 
 init(Arg) ->
     PeerTable = ets:new(peer_table, [ordered_set, public, named_table]),
-    ets:new('Types', [set, public, named_table]),
+    ets:new('Attributes', [set, public, named_table]),
     ets:new(incomplete_table, [set, public, named_table]),
     ets:new(node_ets_table, [set, public, named_table]),
     ets:insert(node_ets_table, {?MODULE, PeerTable}),
 
-    util_lock:lock_init(),
+    util_lock:lock_init([lockdaemon_join_table, lockdaemon_ets_table]),
     util_lock:wakeup_init(),
 
     {ok, Arg}.
@@ -99,7 +99,7 @@ handle_call({'get-ets-table'}, _From, State) ->
 
 
 %% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
-handle_call({Key, {put, UniqueKey}}, _From, State) ->
+handle_call({Key, {put, ParentKey}}, _From, State) ->
     %%
     %% todo
     %%
@@ -107,86 +107,77 @@ handle_call({Key, {put, UniqueKey}}, _From, State) ->
 
 
 %% lookupメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，lookup_process_0に繋げる．
-handle_call({lookup, Key0, Key1, TypeList, From},
+handle_call({lookup, Key0, Key1, AttributeList, From},
     _From,
     [InitialNode | Tail]) ->
 
     Ref = make_ref(),
 
-    spawn(fun() ->
-                lookup:lookup(InitialNode, Key0, Key1, TypeList, {Ref, From})
+    spawn_link(fun() ->
+                sg_lookup:lookup(InitialNode, Key0, Key1, AttributeList, {Ref, From})
         end),
     {reply, Ref, [InitialNode | Tail]};
 
 
 %% 最適なピアを探索する．
-handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, TypeList, From}}},
+handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From}}},
     _From,
     State) ->
 
-    spawn(fun() ->
-                lookup:process_0(SelfKey, Key0, Key1, TypeList, From)
+    spawn_link(fun() ->
+                sg_lookup:process_0(SelfKey, Key0, Key1, AttributeList, From)
         end),
     {reply, nil, State};
 
 
 %% 指定された範囲内を走査し，値を収集する．
-handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, TypeList, From}}},
+handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, AttributeList, From}}},
     _From,
     State) ->
 
-    spawn(fun() ->
-                lookup:process_1(SelfKey, Key0, Key1, TypeList, From)
+    spawn_link(fun() ->
+                sg_lookup:process_1(SelfKey, Key0, Key1, AttributeList, From)
         end),
     {noreply, State};
 
 
 %% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す．
-handle_call({'select-first-peer', _NewKey},
-    From,
-    [InitialNode | Tail]) ->
-
+handle_call({'select-first-peer', _NewKey}, From, [InitialNode | Tail]) ->
     PeerList = ets:tab2list(peer_table),
-    Self = self(),
-
     case PeerList of
         [] ->
             case InitialNode of
-                nil ->
-                    gen_server:reply(From,
-                        {ok, {nil, nil}});
+                nil -> gen_server:reply(From, {ok, {nil, nil}});
                 _ ->
                     {_, Key} = gen_server:call(InitialNode, {peer, random}),
                     gen_server:reply(From, {ok, {InitialNode, Key}})
             end;
-
         _ ->
-            [{SelfKey, {_, _}} | _] = PeerList,
-            gen_server:reply(From, {ok, {Self, SelfKey}})
+            [{SelfKey, _} | _] = PeerList,
+            gen_server:reply(From, {ok, {self(), SelfKey}})
     end,
-
     {noreply, [InitialNode | Tail]};
 
 
 %% join-process-0にFromを渡して再度呼ぶ．
 handle_call({SelfKey, {'join-process-0', {Server, NewKey, MVector}}, Level}, From, State) ->
-    spawn(gen_server, call, [self(), {SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level}]),
+    spawn_link(gen_server, call, [self(), {SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level}]),
     {noreply, State};
 
-%% join:process_0/3関数をutil_lock:join_lockに与える
+%% sg_join:process_0/3関数をutil_lock:join_lockに与える
 handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
     F = fun() ->
-            join:process_0(SelfKey, {From, Server, NewKey, MVector}, Level)
+            sg_join:process_0(SelfKey, From, Server, NewKey, MVector, Level)
     end,
     util_lock:join_lock({SelfKey, Level}, F),
     {noreply, State};
 
 
 %% ネットワーク先ノードから呼び出されるために存在する．
-%% join:process_1を，他の処理をlockして呼び出す．
+%% sg_join:process_1を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
     F = fun() ->
-            join:process_1(SelfKey, {From, Server, NewKey, MVector}, Level)
+            sg_join:process_1(SelfKey, From, Server, NewKey, MVector, Level)
     end,
     util_lock:join_lock({SelfKey, Level}, F),
     {reply, nil, State};
@@ -194,22 +185,22 @@ handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MVector}}, Level
 
 %% join-process-0-onewayにFromを渡して再度呼び出す．
 handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MVector}}, Level}, From, State) ->
-    spawn(gen_server, call, [self(), {SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}]),
+    spawn_link(gen_server, call, [self(), {SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}]),
     {noreply, State};
 
-%% join:process_0_oneway/3関数をutil_lock:join_lockに与える
+%% sg_join:process_0_oneway/3関数をutil_lock:join_lockに与える
 handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
     F = fun() ->
-            join:process_0_oneway(SelfKey, From, Server, NewKey, MVector, Level)
+            sg_join:process_0_oneway(SelfKey, From, Server, NewKey, MVector, Level)
     end,
     util_lock:join_lock({SelfKey, Level}, F),
     {noreply, State};
 
 
-%% join:process_1_oneway/3関数を呼び出す．ローカルからこのコールバック関数を呼び出すことはほとんどない．
+%% sg_join:process_1_oneway/3関数を呼び出す．ローカルからこのコールバック関数を呼び出すことはほとんどない．
 handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
     F = fun() ->
-            join:process_1_oneway(SelfKey, From, Server, NewKey, MVector, Level)
+            sg_join:process_1_oneway(SelfKey, From, Server, NewKey, MVector, Level)
     end,
     util_lock:join_lock({SelfKey, Level}, F),
     {reply, nil, State};
@@ -220,7 +211,7 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
     Self = self(),
     F = fun() ->
             Ref = make_ref(),
-            util:update(SelfKey, {Server, NewKey}, Level),
+            util_lock:set_neighbor(SelfKey, {Server, NewKey}, Level),
             if
                 NewKey < SelfKey -> gen_server:reply(From, {ok, {Other, {Self, SelfKey}}, {self(), Ref}});
                 SelfKey < NewKey -> gen_server:reply(From, {ok, {{Self, SelfKey}, Other}, {self(), Ref}})
@@ -231,7 +222,7 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
                     ok
             end,
             case ets:lookup(node_ets_table, Server) of
-                [] -> spawn(ets, insert, [node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}]);
+                [] -> spawn_link(ets, insert, [node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}]);
                 _  -> ok
             end
     end,
@@ -246,7 +237,7 @@ handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level},
 
     Self = self(),
 
-    spawn(fun() ->
+    spawn_link(fun() ->
                 gen_server:call(Self,
                     {SelfKey,
                         {'remove-process-0',
@@ -257,13 +248,13 @@ handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level},
 
     {noreply, State};
 
-%% remove:process_0/3関数をutil_lock:join_lockに与える
+%% sg_remove:process_0/3関数をutil_lock:join_lockに与える
 handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level},
     _From,
     State) ->
 
     F = fun() ->
-            remove:process_0(SelfKey,
+            sg_remove:process_0(SelfKey,
                 {From,
                     RemovedKey},
                 Level)
@@ -280,7 +271,7 @@ handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level},
 
     Self = self(),
 
-    spawn(fun() ->
+    spawn_link(fun() ->
                 gen_server:call(Self,
                     {SelfKey,
                         {'remove-process-1',
@@ -292,13 +283,13 @@ handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level},
     {noreply, State};
 
 %% ネットワーク先ノードから呼び出されるために存在する．
-%% remove:process_1を，他の処理をlockして呼び出す．
+%% sg_remove:process_1を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
     _From,
     State) ->
 
     F = fun() ->
-            remove:process_1(SelfKey,
+            sg_remove:process_1(SelfKey,
                 {From,
                     RemovedKey},
                 Level)
@@ -309,13 +300,13 @@ handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
 
 
 %% ネットワーク先ノードから呼び出されるために存在する．
-%% remove:process_2を，他の処理をlockして呼び出す．
+%% sg_remove:process_2を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Level},
     _From,
     State) ->
 
     F = fun() ->
-            remove:process_2(SelfKey,
+            sg_remove:process_2(SelfKey,
                 {From,
                     RemovedKey},
                 NewNeighbor,
@@ -327,18 +318,19 @@ handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Lev
 
 
 %% ネットワーク先ノードから呼び出されるために存在する．
-%% remove:process_3を，他の処理をlockして呼び出す．
+%% sg_remove:process_3を，他の処理をlockして呼び出す．
 handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Level},
     _From,
     State) ->
 
-    remove:process_3(SelfKey, {From, RemovedKey}, NewNeighbor, Level),
+    sg_remove:process_3(SelfKey, {From, RemovedKey}, NewNeighbor, Level),
     {reply, nil, State}.
 
 
 %% gen_server内でエラーが発生したとき，再起動させる．
 %% 今のところ正常に動作しないが，デバッグなどに便利なので絶賛放置中
 terminate(_Reason, State) ->
+    io:format("~p~n", [_Reason]),
     spawn(fun() ->
                 test(),
                 unregister(?MODULE),
@@ -368,36 +360,57 @@ code_change(_OldVsn, State, _NewVsn) ->
 %% 新しいピアをjoinする
 
 join(Key) ->
-    join(Key, nil).
+    join(nil, {nil, Key}).
 
-join(UniqueKey, {Type, Key}) ->
-    InitTables = fun() ->
-            ets:insert(peer_table, {{{Type, Key}, UniqueKey}, {MVector, Neighbor}}),
-            ets:insert('Types', {UniqueKey, Type}),
-            ets:insert('Types', {{UniqueKey, Type}, Key})
+join(ParentKey, {Attribute, Key}) ->
+    InitTables = fun(MVector, {Smaller, Bigger}) ->
+            NewPstate = #pstate {
+                parent_key = ParentKey,
+                mvector = MVector,
+                smaller = Smaller,
+                bigger = Bigger
+            },
+            ets:insert(peer_table, {{{Attribute, Key}, ParentKey}, NewPstate}),
+            ets:insert('Attributes', {ParentKey, Attribute}),
+            ets:insert('Attributes', {{ParentKey, Attribute}, Key})
     end,
 
-    case ets:lookup(peer_table, {{Type, Key}, UniqueKey}) of
-        [{{{Type, Key}, UniqueKey}, {_, _}}] -> pass;
+    case ets:lookup(peer_table, {{Attribute, Key}, ParentKey}) of
+        [{{{Attribute, Key}, ParentKey}, {_, _}}] -> pass;
         [] ->
-            MVector    = util:make_membership_vector(),
+            MVector    = util_mvector:make(),
             Neighbor   = {lists:duplicate(?LEVEL_MAX, {nil, nil}), lists:duplicate(?LEVEL_MAX, {nil, nil})},
-            case gen_server:call(whereis(?MODULE), {'select-first-peer', {{Type, Key}, UniqueKey}}) of
-                {ok, {nil, nil}} -> InitTables();
+            case gen_server:call(whereis(?MODULE), {'select-first-peer', {{Attribute, Key}, ParentKey}}) of
+                {ok, {nil, nil}} -> InitTables(MVector, Neighbor);
                 {ok, InitPeer} ->
-                    ets:insert(incomplete_table, {{{Type, Key}, UniqueKey}, {{join, -1}, {remove, ?LEVEL_MAX}}}),
-                    InitTables(),
-                    join(InitPeer, {{Type, Key}, UniqueKey}, MVector)
+                    ets:insert(incomplete_table, {{{Attribute, Key}, ParentKey}, {{join, -1}, {remove, ?LEVEL_MAX}}}),
+                    InitTables(MVector, Neighbor),
+                    join(InitPeer, {{Attribute, Key}, ParentKey}, MVector)
             end
     end,
     ok.
 
 
 join(InitPeer, Key, MVector) ->
-    join(InitPeer, Key, MVector, 0, {nil, nil}).
+    join(InitPeer, Key, MVector, 1, {nil, nil}).
 
 join(_, Key, _, ?LEVEL_MAX, _) ->
     F = fun(Item) ->
+            case Item of
+                [] -> {pass};
+                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
+                [{Key, _}] -> {delete, Key}
+            end
+    end,
+    util_lock:ets_lock(incomplete_table, Key, F);
+join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
+    IncrLevel = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
+            case RLevel of
+                ?LEVEL_MAX -> {ok, {Key, {{join, Level}, {remove, RLevel}}}};
+                _          -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
+            end
+    end,
+    DeleteIncompleteElement = fun(Item) ->
             case Item of
                 [] ->
                     {pass};
@@ -407,51 +420,16 @@ join(_, Key, _, ?LEVEL_MAX, _) ->
                     {delete, Key}
             end
     end,
-    util:ets_lock(peer_table, incomplete_table, Key, F);
 
-join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
-    Result = gen_server:call(InitNode,
-        {InitKey,
-            {'join-process-0',
-                {whereis(?MODULE),
-                    NewKey,
-                    MVector}},
-            Level},
-        ?TIMEOUT),
-
-    case Result of
+    io:format("join ~p~n", [Level]),
+    case gen_server:call(InitNode, {InitKey, {'join-process-0', {whereis(?MODULE), NewKey, MVector}}, Level}, ?TIMEOUT) of
         {exist, {Node, Key}} ->
             pass;
-
         {ok, {{nil, nil}, {nil, nil}}, _} ->
-            F = fun(Item) ->
-                    case Item of
-                        [] ->
-                            {pass};
-                        [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                        [{Key, _}] ->
-                            {delete, Key}
-                    end
-            end,
-            util:ets_lock(peer_table, incomplete_table, NewKey, F);
-
+            util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElement);
         {ok, {{nil, nil}, BiggerPeer}, {Pid, Ref}} ->
-            io:format("~nBiggerPeer=~p~n", [BiggerPeer]),
-
-            util:update(NewKey, BiggerPeer, Level),
-
-            F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
-                    case RLevel of
-                        ?LEVEL_MAX ->
-                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
-
-                        _ ->
-                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
-                    end
-            end,
-
-            case util:ets_lock(peer_table, incomplete_table, NewKey, F) of
+            util_lock:set_neighbor(NewKey, BiggerPeer, Level),
+            case util_lock:ets_lock(incomplete_table, NewKey, IncrLevel) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     util_lock:wakeup_with_report({NewKey, Level}, removing);
@@ -459,52 +437,23 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
                     Pid ! {ok, Ref},
                     util_lock:wakeup({NewKey, Level})
             end,
-
             join_oneway(BiggerPeer, NewKey, MVector, Level + 1);
-
         {ok, {SmallerPeer, {nil, nil}}, {Pid, Ref}} ->
-            io:format("~nSmallerPeer=~p~n", [SmallerPeer]),
-
-            util:update(NewKey, SmallerPeer, Level),
-
-            F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
-                    case RLevel of
-                        ?LEVEL_MAX ->
-                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
-
-                        _ ->
-                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
-                    end
-            end,
-
-            case util:ets_lock(peer_table, incomplete_table, NewKey, F) of
+            util_lock:set_neighbor(NewKey, SmallerPeer, Level),
+            case util_lock:ets_lock(incomplete_table, NewKey, IncrLevel) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     util_lock:wakeup_with_report({NewKey, Level}, removing);
                 _ ->
+                    io:format("ets_lock ok~n"),
                     Pid ! {ok, Ref},
                     util_lock:wakeup({NewKey, Level})
             end,
-
             join_oneway(SmallerPeer, NewKey, MVector, Level + 1);
-
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
-            io:format("~nSmallerPeer=~p, BiggerPeer=~p, {~p, ~p}~n", [SmallerPeer, BiggerPeer, Pid, Ref]),
-
-            util:update(NewKey, SmallerPeer, Level),
-            util:update(NewKey, BiggerPeer, Level),
-
-            F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
-                    case RLevel of
-                        ?LEVEL_MAX ->
-                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
-
-                        _ ->
-                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
-                    end
-            end,
-
-            case util:ets_lock(peer_table, incomplete_table, NewKey, F) of
+            util_lock:set_neighbor(NewKey, SmallerPeer, Level),
+            util_lock:set_neighbor(NewKey, BiggerPeer, Level),
+            case util_lock:ets_lock(incomplete_table, NewKey, IncrLevel) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     util_lock:wakeup_with_report({NewKey, Level}, removing);
@@ -512,28 +461,14 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
                     Pid ! {ok, Ref},
                     util_lock:wakeup({NewKey, Level})
             end,
-
             join(SmallerPeer, NewKey, MVector, Level + 1, BiggerPeer);
-
         {error, mismatch} ->
             case OtherPeer of
                 {nil, nil} ->
-                    F = fun(Item) ->
-                            case Item of
-                                [] ->
-                                    {pass};
-                                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                                [{Key, _}] ->
-                                    {delete, Key}
-                            end
-                    end,
-                    util:ets_lock(peer_tableincomplete_table, NewKey, F);
-
+                    util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElement);
                 _ ->
                     join_oneway(OtherPeer, NewKey, MVector, Level)
             end;
-
         Message ->
             io:format("*ERR* join/5:unknown message: ~p~n", [Message]),
             error
@@ -553,9 +488,10 @@ join_oneway(_, Key, _, ?LEVEL_MAX) ->
                     {delete, Key}
             end
     end,
-    util:ets_lock(peer_table, incomplete_table, Key, F);
+    util_lock:ets_lock(incomplete_table, Key, F);
 
 join_oneway({InitNode, InitKey}, NewKey,  MVector, Level) ->
+    io:format("join_oneway ~p~n", [Level]),
     Result = gen_server:call(InitNode,
         {InitKey,
             {'join-process-0-oneway',
@@ -582,10 +518,10 @@ join_oneway({InitNode, InitKey}, NewKey,  MVector, Level) ->
                             {delete, Key}
                     end
             end,
-            util:ets_lock(peer_table, incomplete_table, NewKey, F);
+            util_lock:ets_lock(incomplete_table, NewKey, F);
 
         {ok, Peer, {Pid, Ref}} ->
-            util:update(NewKey, Peer, Level),
+            util_lock:set_neighbor(NewKey, Peer, Level),
 
             F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
                     case RLevel of
@@ -597,7 +533,7 @@ join_oneway({InitNode, InitKey}, NewKey,  MVector, Level) ->
                     end
             end,
 
-            case util:ets_lock(peer_table, incomplete_table, NewKey, F) of
+            case util_lock:ets_lock(incomplete_table, NewKey, F) of
                 {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
                     Pid ! {error, Ref, removing},
                     util_lock:wakeup_with_report({NewKey, Level}, removing);
@@ -619,7 +555,7 @@ join_oneway({InitNode, InitKey}, NewKey,  MVector, Level) ->
                             {delete, Key}
                     end
             end,
-            util:ets_lock(peer_table, incomplete_table, NewKey, F);
+            util_lock:ets_lock(incomplete_table, NewKey, F);
 
         Message ->
             io:format("*ERR* join/4:unknown message: ~p~n", [Message]),
@@ -648,7 +584,7 @@ remove(Key) ->
                     end
             end,
 
-            util:ets_lock(peer_table, incomplete_table, Key, F)
+            util_lock:ets_lock(incomplete_table, Key, F)
     end,
 
     remove(Key, ?LEVEL_MAX - 1).
@@ -667,12 +603,12 @@ remove(Key, Level) ->
             {error, 'already-removing'};
 
         {ok, removed} ->
-            util:update(Key, {nil, nil}, Level),
+            util_lock:set_neighbor(Key, {nil, nil}, Level),
 
             F = fun([{Key, {{join, _N}, {remove, Level}}}]) ->
                     {ok, {Key, {{join, _N}, {remove, Level - 1}}}}
             end,
-            util:ets_lock(peer_table, incomplete_table, Key, F),
+            util_lock:ets_lock(incomplete_table, Key, F),
 
             remove(Key, Level - 1)
     end.
@@ -684,15 +620,9 @@ remove(Key, Level) ->
 %% Description(en): put value
 %% Returns: ok | {error, Reason}
 %%--------------------------------------------------------------------
-put(UniqueKey, KeyList) ->
-    F = fun(Key) ->
-            join(UniqueKey, Key)
-    end,
-
-    ets:insert('Types', {UniqueKey, [Type || {Type, _} <- KeyList]}),
-    join(undefined, {'unique-key', UniqueKey}),
-
-    lists:foreach(F, KeyList).
+put(ParentKey, KeyList) ->
+    ets:insert('Attributes', {ParentKey, [Attribute || {Attribute, _} <- KeyList]}),
+    lists:foreach(fun(Key) -> join(ParentKey, Key) end, KeyList).
 
 
 %%--------------------------------------------------------------------
@@ -704,13 +634,13 @@ put(UniqueKey, KeyList) ->
 get(Key) ->
     get(Key, [value]).
 
-get(Key, TypeList) ->
-    lookup:call(?MODULE, Key, Key, TypeList).
+get(Key, AttributeList) ->
+    sg_lookup:call(?MODULE, Key, Key, AttributeList).
 
-get(Key0, Key1, TypeList) when Key1 < Key0 ->
-    get(Key1, Key0, TypeList);
-get(Key0, Key1, TypeList) ->
-    lookup:call(?MODULE, Key0, Key1, TypeList).
+get(Key0, Key1, AttributeList) when Key1 < Key0 ->
+    get(Key1, Key0, AttributeList);
+get(Key0, Key1, AttributeList) ->
+    sg_lookup:call(?MODULE, Key0, Key1, AttributeList).
 
 
 test() ->

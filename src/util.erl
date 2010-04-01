@@ -26,11 +26,12 @@
 
 -module(util).
 
+-include("../include/common.hrl").
+
 -export([select_best/3]).
 
 %-define(TIMEOUT, 3000).
 -define(TIMEOUT, infinity).
--define(SERVER_MODULE, skipgraph).
 
 
 %% Neighborの中から最適なピアを選択する

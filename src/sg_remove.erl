@@ -25,7 +25,7 @@
 %%    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--module(remove).
+-module(sg_remove).
 -export([process_0/3, process_1/3, process_2/4, process_3/4]).
 
 %-define(LEVEL_MAX, 8).
@@ -82,9 +82,9 @@ process_1(SelfKey, {From, RemovedKey}, Level) ->
     [{SelfKey, {_, _, {Smaller, Bigger}}}] = ets:lookup('Peer', SelfKey),
 
     case lists:nth(Level + 1, Smaller) of
-        {'__none__', '__none__'} ->
+        {nil, nil} ->
             case lists:nth(Level + 1, Bigger) of
-                {'__none__', '__none__'} ->
+                {nil, nil} ->
                     gen_server:reply(From, {ok, removed});
 
                 {BiggerNode, BiggerKey} ->
@@ -129,7 +129,7 @@ process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) ->
     case OldKey of
         RemovedKey ->
             case NewNeighbor of
-                {'__none__', '__none__'} ->
+                {nil, nil} ->
                     util:update(SelfKey, NewNeighbor, Level);
 
                 {NewNode, NewKey} ->

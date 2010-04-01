@@ -24,7 +24,7 @@
 %%    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--module(lookup).
+-module(sg_lookup).
 -export([lookup/5, process_0/5, process_1/5, call/4]).
 
 

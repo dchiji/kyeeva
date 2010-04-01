@@ -28,8 +28,8 @@
 
 -export([process_0/6,
         process_1/6,
-        process_0_oneway/3,
-        process_1_oneway/3]).
+        process_0_oneway/6,
+        process_1_oneway/6]).
 
 -include("../include/common.hrl").
 
@@ -122,9 +122,10 @@ process_0_3(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B, _) ->
 
 %% process_0/3関数から呼び出される．
 %% MVector[Level]が一致するピアを外側に向かって探索．
-%% 成功したら自身のNeighborをutil_lock:updateし，Anotherにもutil_lock:updateメッセージを送信する．
+%% 成功したら自身のNeighborをutil_lock:set_neighborし，Anotherにもutil_lock:set_neighborメッセージを送信する．
 process_1(MyKey, From, Server, NewKey, MVector, Level) ->
     [{MyKey, MyPstate}] = ets:lookup(peer_table, MyKey),
+    io:format("Level = ~p, NewKey=~p, MyKey=~p~n", [Level, NewKey, MyKey]),
     MyBit               = util_mvector:nth(Level, MyPstate#pstate.mvector),
     Bit                 = util_mvector:nth(Level, MVector),
     case Bit of
@@ -163,7 +164,7 @@ process_1_1(MyKey, From, Server, NewKey, MVector, Level, MyPstate, [{MyKey, {joi
                 _ -> process_1_1(MyKey, From, Server, NewKey, MVector, Level, MyPstate, ets:lookup(incomplete_table, MyKey))
             end
     end;
-% util_lock:update処理を行い，反対側のピアにもメッセージを送信する
+% util_lock:set_neighbor処理を行い，反対側のピアにもメッセージを送信する
 process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
     Ref = make_ref(),
     % reply先がNeighborの更新に成功するまで待機
@@ -185,20 +186,20 @@ process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
     case lists:nth(Level, Neighbor) of
         {nil, nil} ->
             gen_server:reply(From, Reply),
-            WaitRemoteUpdate(fun() -> util_lock:update(MyKey, {Server, NewKey}, Level) end);
+            WaitRemoteUpdate(fun() -> util_lock:set_neighbor(MyKey, {Server, NewKey}, Level) end);
         {OtherServer, OtherKey} ->
             MyServer = whereis(?SERVER_MODULE),
             Update = case OtherServer of
                 MyServer ->
-                    %% if OtherServer is myself, i call util_lock:update directly
+                    %% if OtherServer is myself, i call util_lock:set_neighbor directly
                     fun() ->
-                            util_lock:update(MyKey, {Server, NewKey}, Level),
-                            util_lock:update(OtherKey, {Server, NewKey}, Level)
+                            util_lock:set_neighbor(MyKey, {Server, NewKey}, Level),
+                            util_lock:set_neighbor(OtherKey, {Server, NewKey}, Level)
                     end;
                 _ ->
                     fun() ->
                             gen_server:call(OtherServer, {OtherKey, {'join-process-2', {From, Server, NewKey}}, Level, {whereis(?SERVER_MODULE), MyKey}}),
-                            util_lock:update(MyKey, {Server, NewKey}, Level)
+                            util_lock:set_neighbor(MyKey, {Server, NewKey}, Level)
                     end
             end,
             ReplyAndUpdate = fun(UpdateCallback) ->
@@ -214,11 +215,11 @@ process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
 
 %% process_0/3関数と同じだが，process_1_oneway/3関数を呼び出す
 
-process_0_oneway(MyKey, {From, Server, NewKey, MVector}, Level) ->
+process_0_oneway(MyKey, From, Server, NewKey, MVector, Level) ->
     case ets:lookup(incomplete_table, MyKey) of
         [{MyKey, {join, -1}}] ->
             timer:sleep(2),
-            gen_server:call(?SERVER_MODULE, {MyKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}));
+            gen_server:call(?SERVER_MODULE, {MyKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level});
         _ ->
             process_0_oneway_1(MyKey, From, Server, NewKey, MVector, Level)
     end.
@@ -234,14 +235,14 @@ process_0_oneway_1(MyKey, From, Server, NewKey, MVector, Level) ->
 process_0_oneway_2(MyKey, From, Server, NewKey, MVector, 1=Level, Neighbor, S_or_B) ->
     case util:select_best(Neighbor, NewKey, S_or_B) of
         {nil, nil} ->
-            process_1_oneway(MyKey, {From, Server, NewKey, MVector}, Level);
+            process_1_oneway(MyKey, From, Server, NewKey, MVector, Level);
         {self, self} ->
-            process_1_oneway(MyKey, {From, Server, NewKey, MVector}, Level);
+            process_1_oneway(MyKey, From, Server, NewKey, MVector, Level);
 
         % 最適なピアの探索を続ける(join-process-0-oneway)
         {BestNode, BestKey} ->
             gen_server:call(BestNode, {BestKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level})
-    end.
+    end;
 
 % LevelN(N > 1)の場合，Level(N - 1)以下にはNewKeyピアが存在するので，特別な処理が必要
 process_0_oneway_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B) ->
@@ -263,10 +264,10 @@ process_0_oneway_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B
         % Neighbor[Level]がNewKey => Level上で，MyKeyはNewKeyの隣のピア
         {_, NewKey} ->
             process_1_oneway(MyKey,
-                {From,
+                From,
                     Server,
                     NewKey,
-                    MVector},
+                    MVector,
                 Level);
 
         _ ->
@@ -284,17 +285,17 @@ process_0_oneway_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B
             case BestPeer of
                 {nil, nil} ->
                     process_1_oneway(MyKey,
-                        {From,
+                        From,
                             Server,
                             NewKey,
-                            MVector},
+                            MVector,
                         Level);
                 {self, self} ->
                     process_1_oneway(MyKey,
-                        {From,
+                        From,
                             Server,
                             NewKey,
-                            MVector},
+                            MVector,
                         Level);
 
 
@@ -316,7 +317,7 @@ process_0_oneway_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B
 
 %% process_0_oneway/3関数から呼び出される．
 %% 基本はprocess_1/3関数と同じだが，片方向にしか探索しない．
-process_1_oneway(MyKey, {From, Server, NewKey, MVector}, Level) ->
+process_1_oneway(MyKey, From, Server, NewKey, MVector, Level) ->
     [{MyKey, {MyMVector, {Smaller, Bigger}}}] = ets:lookup(peer_table, MyKey),
 
     TailN = ?LEVEL_MAX - Level - 1,
@@ -382,7 +383,7 @@ process_1_oneway(MyKey, {From, Server, NewKey, MVector}, Level) ->
                     % reply先がNeighborの更新に成功するまで待機
                     receive
                         {ok, Ref} ->
-                            util_lock:update(MyKey, {Server, NewKey}, Level),
+                            util_lock:set_neighbor(MyKey, {Server, NewKey}, Level),
                             case ets:lookup(node_ets_table, Server) of
                                 [] ->
                                     spawn(fun() ->
