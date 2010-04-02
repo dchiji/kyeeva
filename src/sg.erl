@@ -64,7 +64,7 @@
 start(Initial) ->
     case Initial of
         nil ->
-            gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], []);
+            gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], [{debug, [trace]}]);
         _ ->
             InitialNode = rpc:call(Initial, ?MODULE, get_server, []),
             gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, util_mvector:make()], [{debug, [trace, log]}])
@@ -94,6 +94,7 @@ handle_call({peer, random}, _From, State) ->
 
 
 handle_call({'get-ets-table'}, _From, State) ->
+    io:format("get-ets-table~n"),
     [{?MODULE, Tab}] = ets:lookup(node_ets_table, ?MODULE),
     {reply, Tab, State};
 
@@ -101,32 +102,21 @@ handle_call({'get-ets-table'}, _From, State) ->
 %% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
 handle_call({Key, {put, ParentKey}}, _From, State) ->
     %%
-    %% todo
+    %% TODO
     %%
     {reply, ok, State};
 
 
 %% lookupメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，lookup_process_0に繋げる．
-handle_call({lookup, Key0, Key1, AttributeList, From},
-    _From,
-    [InitialNode | Tail]) ->
-
+handle_call({lookup, Key0, Key1, AttributeList, From}, _From, [InitialNode | Tail]) ->
     Ref = make_ref(),
-
-    spawn_link(fun() ->
-                sg_lookup:lookup(InitialNode, Key0, Key1, AttributeList, {Ref, From})
-        end),
+    spawn_link(sg_lookup,lookup, [InitialNode, Key0, Key1, AttributeList, {Ref, From}]),
     {reply, Ref, [InitialNode | Tail]};
 
 
 %% 最適なピアを探索する．
-handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From}}},
-    _From,
-    State) ->
-
-    spawn_link(fun() ->
-                sg_lookup:process_0(SelfKey, Key0, Key1, AttributeList, From)
-        end),
+handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From}}}, _From, State) ->
+    spawn_link(sg_lookup, process_0, [SelfKey, Key0, Key1, AttributeList, From]),
     {reply, nil, State};
 
 
@@ -169,8 +159,8 @@ handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level
     F = fun() ->
             sg_join:process_0(SelfKey, From, Server, NewKey, MVector, Level)
     end,
-    util_lock:join_lock({SelfKey, Level}, F),
-    {noreply, State};
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
+    {reply, nil, State};
 
 
 %% ネットワーク先ノードから呼び出されるために存在する．
@@ -179,7 +169,8 @@ handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MVector}}, Level
     F = fun() ->
             sg_join:process_1(SelfKey, From, Server, NewKey, MVector, Level)
     end,
-    util_lock:join_lock({SelfKey, Level}, F),
+    %util_lock:join_lock({SelfKey, Level}, F),
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
     {reply, nil, State};
 
 
@@ -193,7 +184,8 @@ handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}
     F = fun() ->
             sg_join:process_0_oneway(SelfKey, From, Server, NewKey, MVector, Level)
     end,
-    util_lock:join_lock({SelfKey, Level}, F),
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
+    %util_lock:join_lock({SelfKey, Level}, F),
     {noreply, State};
 
 
@@ -202,7 +194,8 @@ handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, MVector}}
     F = fun() ->
             sg_join:process_1_oneway(SelfKey, From, Server, NewKey, MVector, Level)
     end,
-    util_lock:join_lock({SelfKey, Level}, F),
+    %util_lock:join_lock({SelfKey, Level}, F),
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
     {reply, nil, State};
 
 
@@ -222,7 +215,7 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
                     ok
             end,
             case ets:lookup(node_ets_table, Server) of
-                [] -> spawn_link(ets, insert, [node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}]);
+                [] -> spawn_link(fun() -> ets:insert(node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}) end);
                 _  -> ok
             end
     end,
@@ -414,6 +407,7 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
     IncrLevel = fun() -> util_lock:ets_lock(incomplete_table, NewKey, IncrLevelCallback) end,
     Reply = fun
         ({ok, {_, {_, {remove, ?LEVEL_MAX}}}}, Pid, Ref) ->
+            io:format("pid=~p, ref=~p~n", [Pid, Ref]),
             Pid ! {ok, Ref},
             util_lock:wakeup({NewKey, Level});
         ({ok, {Key, {{join, Level}, {remove, RLevel}}}}, Pid, Ref) ->
@@ -423,20 +417,20 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
     JoinProcess = fun
         ({nil, nil}, {nil, nil}, _, _) ->
             util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElementCallback),
-            {nil, nil};
+            [{nil, nil}, {nil, nil}];
         (SmallerPeer, {nil, nil}, Pid, Ref) ->
             util_lock:set_neighbor(NewKey, SmallerPeer, Level),
             Reply(IncrLevel(), Pid, Ref),
-            SmallerPeer;
+            [SmallerPeer, {nil, nil}];
         ({nil, nil}, BiggerPeer, Pid, Ref) ->
             util_lock:set_neighbor(NewKey, BiggerPeer, Level),
             Reply(IncrLevel(), Pid, Ref),
-            BiggerPeer;
+            [BiggerPeer, {nil, nil}];
         (SmallerPeer, BiggerPeer, Pid, Ref) ->
             util_lock:set_neighbor(NewKey, SmallerPeer, Level),
             util_lock:set_neighbor(NewKey, BiggerPeer, Level),
             Reply(IncrLevel(), Pid, Ref),
-            SmallerPeer
+            [SmallerPeer, BiggerPeer]
     end,
 
     io:format("join ~p~n", [Level]),
@@ -444,102 +438,15 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
         {exist, {Node, Key}} ->
             pass;
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
-            join(JoinProcess(SmallerPeer, BiggerPeer, Pid, Ref), NewKey, MVector, Level + 1, BiggerPeer);
+            [NextPeer, NextOtherPeer] = JoinProcess(SmallerPeer, BiggerPeer, Pid, Ref),
+            join(NextPeer, NewKey, MVector, Level + 1, NextOtherPeer);
         {error, mismatch} ->
             case OtherPeer of
                 {nil, nil} -> util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElementCallback);
-                _          -> join_oneway(OtherPeer, NewKey, MVector, Level)
+                _          -> join(OtherPeer, NewKey, MVector, Level, {nil, nil})
             end;
         Message ->
             io:format("*ERR* join/5:unknown message: ~p~n", [Message]),
-            error
-    end.
-
-
-%% 一方のNeighborがnilのとき，もう一方のNeighborを通して新たなピアをjoinする
-
-join_oneway(_, Key, _, ?LEVEL_MAX) ->
-    F = fun(Item) ->
-            case Item of
-                [] ->
-                    {pass};
-                [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                    {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                [{Key, _}] ->
-                    {delete, Key}
-            end
-    end,
-    util_lock:ets_lock(incomplete_table, Key, F);
-
-join_oneway({InitNode, InitKey}, NewKey,  MVector, Level) ->
-    io:format("join_oneway ~p~n", [Level]),
-    Result = gen_server:call(InitNode,
-        {InitKey,
-            {'join-process-0-oneway',
-                {whereis(?MODULE),
-                    NewKey,
-                    MVector}},
-            Level},
-        ?TIMEOUT),
-
-    %io:format("NewKey=~p, Level=~p, Result=~p~n", [NewKey, Level, Result]),
-
-    case Result of
-        {exist, {Node, Key}} ->
-            pass;
-
-        {ok, {nil, nil}, _} ->
-            F = fun(Item) ->
-                    case Item of
-                        [] ->
-                            {pass};
-                        [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                        [{Key, _}] ->
-                            {delete, Key}
-                    end
-            end,
-            util_lock:ets_lock(incomplete_table, NewKey, F);
-
-        {ok, Peer, {Pid, Ref}} ->
-            util_lock:set_neighbor(NewKey, Peer, Level),
-
-            F = fun([{Key, {{join, JLevel}, {remove, RLevel}}}]) ->
-                    case RLevel of
-                        ?LEVEL_MAX ->
-                            {ok, {Key, {{join, Level}, {remove, RLevel}}}};
-
-                        _ ->
-                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
-                    end
-            end,
-
-            case util_lock:ets_lock(incomplete_table, NewKey, F) of
-                {ok, {Key, {{join, Level}, {remove, RLevel}}}} when RLevel /= ?LEVEL_MAX ->
-                    Pid ! {error, Ref, removing},
-                    util_lock:wakeup_with_report({NewKey, Level}, removing);
-                _ ->
-                    Pid ! {ok, Ref},
-                    util_lock:wakeup({NewKey, Level})
-            end,
-
-            join_oneway(Peer, NewKey, MVector, Level + 1);
-
-        {error, mismatch} ->
-            F = fun(Item) ->
-                    case Item of
-                        [] ->
-                            {pass};
-                        [{Key, {{join, JLevel}, {remove, RLevel}}}] when RLevel /= ?LEVEL_MAX ->
-                            {ok, {Key, {{join, JLevel}, {remove, RLevel}}}};
-                        [{Key, _}] ->
-                            {delete, Key}
-                    end
-            end,
-            util_lock:ets_lock(incomplete_table, NewKey, F);
-
-        Message ->
-            io:format("*ERR* join/4:unknown message: ~p~n", [Message]),
             error
     end.
 

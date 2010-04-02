@@ -15,7 +15,7 @@ test() ->
     timer:sleep(infinity).
 
 join_test() ->
-    join_test(1, 1000).
+    join_test(1, 100000).
 
 join_test(N, N) ->
     ok;

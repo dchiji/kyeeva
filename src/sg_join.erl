@@ -27,9 +27,7 @@
 -module(sg_join).
 
 -export([process_0/6,
-        process_1/6,
-        process_0_oneway/6,
-        process_1_oneway/6]).
+        process_1/6]).
 
 -include("../include/common.hrl").
 
@@ -53,9 +51,9 @@ process_0(MyKey, From, Server, NewKey, MVector, Level) ->
             %% TODO
             pass;
         _ ->
-            io:format("process_0/6:\tok~n"),
             process_0_1(MyKey, From, Server, NewKey, MVector, Level)
-    end.
+    end,
+    io:format("process-0 ok~n").
 
 process_0_1(MyKey, From, Server, NewKey, MVector, Level) when MyKey == NewKey ->
     [{MyKey, MyPstate}] = ets:lookup(peer_table, MyKey),
@@ -69,7 +67,6 @@ process_0_1(MyKey, From, Server, NewKey, MVector, Level) ->
         NewKey < MyKey -> {MyPstate#pstate.smaller, smaller};
         MyKey < NewKey -> {MyPstate#pstate.bigger, bigger}
     end,
-    io:format("process_0_1/6:\tok~n"),
     process_0_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B).
 
 process_0_2(MyKey, From, Server, NewKey, MVector, 1=Level, Neighbor, S_or_B) ->
@@ -125,7 +122,6 @@ process_0_3(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B, _) ->
 %% 成功したら自身のNeighborをutil_lock:set_neighborし，Anotherにもutil_lock:set_neighborメッセージを送信する．
 process_1(MyKey, From, Server, NewKey, MVector, Level) ->
     [{MyKey, MyPstate}] = ets:lookup(peer_table, MyKey),
-    io:format("Level = ~p, NewKey=~p, MyKey=~p~n", [Level, NewKey, MyKey]),
     MyBit               = util_mvector:nth(Level, MyPstate#pstate.mvector),
     Bit                 = util_mvector:nth(Level, MVector),
     case Bit of
@@ -171,12 +167,13 @@ process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
     WaitRemoteUpdate = fun(UpdateCallback) ->
             receive
                 {ok, Ref} ->
+                    io:format("waiting pid=~p, ref=~p~n", [self(), Ref]),
                     UpdateCallback(),
                     case ets:lookup(node_ets_table, Server) of
-                        [] -> ets:insert(node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})});
+                        [] -> spawn(fun() -> ets:insert(node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}) end);
                         _  -> ok
                     end;
-                {error, Ref, _Message} -> pass
+                {error, Ref, Reason} -> io:format("reason: ~p~n", [Reason])
             end
     end,
     {Neighbor, Reply} = if
@@ -189,7 +186,7 @@ process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
             WaitRemoteUpdate(fun() -> util_lock:set_neighbor(MyKey, {Server, NewKey}, Level) end);
         {OtherServer, OtherKey} ->
             MyServer = whereis(?SERVER_MODULE),
-            Update = case OtherServer of
+            UpdateCallback = case OtherServer of
                 MyServer ->
                     %% if OtherServer is myself, i call util_lock:set_neighbor directly
                     fun() ->
@@ -202,238 +199,9 @@ process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
                             util_lock:set_neighbor(MyKey, {Server, NewKey}, Level)
                     end
             end,
-            ReplyAndUpdate = fun(UpdateCallback) ->
-                    if
-                        NewKey < MyKey -> gen_server:reply(From, {ok, {{OtherServer, OtherKey}, {MyServer, MyKey}}, {self(), Ref}});
-                        NewKey > MyKey -> gen_server:reply(From, {ok, {{MyServer, MyKey}, {OtherServer, OtherKey}}, {self(), Ref}})
-                    end,
-                    WaitRemoteUpdate(UpdateCallback)
+            if
+                NewKey < MyKey -> gen_server:reply(From, {ok, {{OtherServer, OtherKey}, {MyServer, MyKey}}, {self(), Ref}});
+                NewKey > MyKey -> gen_server:reply(From, {ok, {{MyServer, MyKey}, {OtherServer, OtherKey}}, {self(), Ref}})
             end,
-            ReplyAndUpdate(Update)
+            WaitRemoteUpdate(UpdateCallback)
     end.
-
-
-%% process_0/3関数と同じだが，process_1_oneway/3関数を呼び出す
-
-process_0_oneway(MyKey, From, Server, NewKey, MVector, Level) ->
-    case ets:lookup(incomplete_table, MyKey) of
-        [{MyKey, {join, -1}}] ->
-            timer:sleep(2),
-            gen_server:call(?SERVER_MODULE, {MyKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level});
-        _ ->
-            process_0_oneway_1(MyKey, From, Server, NewKey, MVector, Level)
-    end.
-
-process_0_oneway_1(MyKey, From, Server, NewKey, MVector, Level) ->
-    [{MyKey, {_, {Smaller, Bigger}}}] = ets:lookup(peer_table, MyKey),
-    {Neighbor, S_or_B} = if
-        NewKey < MyKey -> {Smaller, smaller};
-        MyKey < NewKey -> {Bigger, bigger}
-    end,
-    process_0_oneway_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B).
-
-process_0_oneway_2(MyKey, From, Server, NewKey, MVector, 1=Level, Neighbor, S_or_B) ->
-    case util:select_best(Neighbor, NewKey, S_or_B) of
-        {nil, nil} ->
-            process_1_oneway(MyKey, From, Server, NewKey, MVector, Level);
-        {self, self} ->
-            process_1_oneway(MyKey, From, Server, NewKey, MVector, Level);
-
-        % 最適なピアの探索を続ける(join-process-0-oneway)
-        {BestNode, BestKey} ->
-            gen_server:call(BestNode, {BestKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level})
-    end;
-
-% LevelN(N > 1)の場合，Level(N - 1)以下にはNewKeyピアが存在するので，特別な処理が必要
-process_0_oneway_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B) ->
-    Peer = case ets:lookup(incomplete_table, MyKey) of
-        [{MyKey, {join, MaxLevel}}] when MaxLevel + 1 == Level ->
-            % MaxLevel + 1 == Levelより，lists:nth(MaxLevel + 1, Neighbor) == lists:nth(Level, Neigbor)
-            % なのであまり意味は無い
-            lists:nth(MaxLevel, Neighbor);
-
-        [{MyKey, {join, MaxLevel}}] when MaxLevel < Level ->
-            % バグが無ければ，このパターンになることはない
-            error;
-
-        _ ->
-            lists:nth(Level - 1, Neighbor)
-    end,
-
-    case Peer of
-        % Neighbor[Level]がNewKey => Level上で，MyKeyはNewKeyの隣のピア
-        {_, NewKey} ->
-            process_1_oneway(MyKey,
-                From,
-                    Server,
-                    NewKey,
-                    MVector,
-                Level);
-
-        _ ->
-            % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
-            BestPeer = case ets:lookup(incomplete_table, MyKey) of
-                [{MyKey, {join, MaxLevel_}}] when (MaxLevel_ + 1) == Level ->
-                    util:select_best(lists:nthtail(MaxLevel_ - 1, Neighbor), NewKey, S_or_B);
-                [{MyKey, {join, MaxLevel_}}] when MaxLevel_ < Level ->
-                    % バグが無ければ，このパターンになることはない
-                    error;
-                _ ->
-                    util:select_best(lists:nthtail(Level - 2, Neighbor), NewKey, S_or_B)
-            end,
-
-            case BestPeer of
-                {nil, nil} ->
-                    process_1_oneway(MyKey,
-                        From,
-                            Server,
-                            NewKey,
-                            MVector,
-                        Level);
-                {self, self} ->
-                    process_1_oneway(MyKey,
-                        From,
-                            Server,
-                            NewKey,
-                            MVector,
-                        Level);
-
-
-                % 最適なピアの探索を続ける(join-process-0-oneway)
-                {BestNode, BestKey} ->
-                    spawn(fun() ->
-                                gen_server:call(BestNode,
-                                    {BestKey,
-                                        {'join-process-0-oneway',
-                                            {From,
-                                                Server,
-                                                NewKey,
-                                                MVector}},
-                                        Level})
-                        end)
-            end
-    end.
-
-
-%% process_0_oneway/3関数から呼び出される．
-%% 基本はprocess_1/3関数と同じだが，片方向にしか探索しない．
-process_1_oneway(MyKey, From, Server, NewKey, MVector, Level) ->
-    [{MyKey, {MyMVector, {Smaller, Bigger}}}] = ets:lookup(peer_table, MyKey),
-
-    TailN = ?LEVEL_MAX - Level - 1,
-    <<_:TailN, Bit:1, _:Level>> = MVector,
-    <<_:TailN, MyBit:1, _:Level>> = MyMVector,
-
-    case Bit of
-        MyBit ->
-            case ets:lookup(incomplete_table, MyKey) of
-                [{MyKey, {join, MaxLevel}}] when MaxLevel < Level ->
-                    Neighbor = if
-                        NewKey < MyKey ->
-                            Bigger;
-                        MyKey < NewKey ->
-                            Smaller
-                    end,
-
-                    case lists:nth(MaxLevel, Neighbor) of
-                        {nil, nil} ->
-                            gen_server:reply(From, {error, mismatch});
-
-                        %{OtherNode, OtherKey} ->
-                        %    spawn(fun() ->
-                        %            gen_server:call(OtherNode,
-                        %                {OtherKey,
-                        %                    {'join-process-1-oneway',
-                        %                        {From,
-                        %                            Server,
-                        %                            NewKey,
-                        %                            MVector}},
-                        %                    Level})
-                        %    end)
-                        _ ->
-                            [{{MyKey, MaxLevel}, Daemon}] = ets:lookup('Joining-Wait', {MyKey, MaxLevel}),
-
-                            Ref = make_ref(),
-                            Pid = spawn(fun() ->
-                                        receive
-                                            {ok, Ref} ->
-                                                gen_server:call(?SERVER_MODULE,
-                                                    {MyKey,
-                                                        {'join-process-0-oneway',
-                                                            {From,
-                                                                Server,
-                                                                NewKey,
-                                                                MVector}},
-                                                        Level});
-
-                                            {error, Ref, _Message} ->
-                                                pass
-                                        end
-                                end),
-
-                            Daemon ! {add, {Pid, Ref}}
-                    end;
-
-                _ ->
-                    Ref = make_ref(),
-
-                    gen_server:reply(From,
-                        {ok, {whereis(?SERVER_MODULE), MyKey}, {self(), Ref}}),
-
-                    % reply先がNeighborの更新に成功するまで待機
-                    receive
-                        {ok, Ref} ->
-                            util_lock:set_neighbor(MyKey, {Server, NewKey}, Level),
-                            case ets:lookup(node_ets_table, Server) of
-                                [] ->
-                                    spawn(fun() ->
-                                                Tab = gen_server:call(Server, {'get-ets-table'}),
-                                                ets:insert(node_ets_table, {Server, Tab})
-                                        end);
-                                _ ->
-                                    ok
-                            end;
-
-                        {error, Ref, _Message} ->
-                            pass
-                    end
-
-            end;
-
-        _ ->
-            Peer = if
-                NewKey < MyKey ->
-                    case Level of
-                        1 ->
-                            lists:nth(Level, Bigger);
-                        _ ->
-                            lists:nth(Level - 1, Bigger)
-                    end;
-
-                MyKey < NewKey ->
-                    case Level of
-                        1 ->
-                            lists:nth(Level, Smaller);
-                        _ ->
-                            lists:nth(Level - 1, Smaller)
-                    end
-            end,
-
-            case Peer of
-                {nil, nil} ->
-                    gen_server:reply(From, {error, mismatch});
-
-                {NextNode, NextKey} ->
-                    spawn(fun() ->
-                                gen_server:call(NextNode,
-                                    {NextKey,
-                                        {'join-process-1-oneway',
-                                            {From,
-                                                Server,
-                                                NewKey,
-                                                MVector}},
-                                        Level})
-                        end)
-            end
-    end.
-
