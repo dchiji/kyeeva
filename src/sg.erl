@@ -100,7 +100,7 @@ handle_call({'get-ets-table'}, _From, State) ->
 
 
 %% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
-handle_call({Key, {put, ParentKey}}, _From, State) ->
+handle_call({_Key, {put, _ParentKey}}, _From, State) ->
     %%
     %% TODO
     %%
@@ -376,7 +376,7 @@ join(ParentKey, {Attribute, Key}) ->
             case gen_server:call(whereis(?MODULE), {'select-first-peer', {{Attribute, Key}, ParentKey}}) of
                 {ok, {nil, nil}} -> InitTables(MVector, Neighbor);
                 {ok, InitPeer} ->
-                    ets:insert(incomplete_table, {{{Attribute, Key}, ParentKey}, {{join, -1}, {remove, ?LEVEL_MAX}}}),
+                    ets:insert(incomplete_table, {{{Attribute, Key}, ParentKey}, {{join, -1}, {remove, -1}}}),
                     InitTables(MVector, Neighbor),
                     join(InitPeer, {{Attribute, Key}, ParentKey}, MVector)
             end
@@ -389,28 +389,28 @@ join(InitPeer, Key, MVector) ->
 
 join(_, Key, _, ?LEVEL_MAX, _) ->
     DeleteIncompleteElementCallback = fun
-        ([])                                          -> {pass};
-        ([{Key, {_, {remove, ?LEVEL_MAX}}}])          -> {delete, Key};
-        ([{Key, {{join, JLevel}, {remove, RLevel}}}]) -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
+        ([])                                           -> {pass};
+        ([{Key1, {_, {remove, -1}}}])          -> {delete, Key1};
+        ([{Key1, {{join, JLevel}, {remove, RLevel}}}]) -> {ok, {Key1, {{join, JLevel}, {remove, RLevel}}}}
     end,
     util_lock:ets_lock(incomplete_table, Key, DeleteIncompleteElementCallback);
 join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
     DeleteIncompleteElementCallback = fun
         ([])                                          -> {pass};
-        ([{Key, {_, {remove, ?LEVEL_MAX}}}])          -> {delete, Key};
+        ([{Key, {_, {remove, -1}}}])          -> {delete, Key};
         ([{Key, {{join, JLevel}, {remove, RLevel}}}]) -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
     end,
     IncrLevelCallback = fun
-        ([{Key, {{join, JLevel}, {remove, ?LEVEL_MAX}}}]) -> {ok, {Key, {{join, Level}, {remove, ?LEVEL_MAX}}}};
+        ([{Key, {{join, _}, {remove, -1}}}]) -> {ok, {Key, {{join, Level}, {remove, ?LEVEL_MAX}}}};
         ([{Key, {{join, JLevel}, {remove, RLevel}}}])     -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
     end,
     IncrLevel = fun() -> util_lock:ets_lock(incomplete_table, NewKey, IncrLevelCallback) end,
     Reply = fun
-        ({ok, {_, {_, {remove, ?LEVEL_MAX}}}}, Pid, Ref) ->
+        ({ok, {_, {_, {remove, -1}}}}, Pid, Ref) ->
             io:format("pid=~p, ref=~p~n", [Pid, Ref]),
             Pid ! {ok, Ref},
             util_lock:wakeup({NewKey, Level});
-        ({ok, {Key, {{join, Level}, {remove, RLevel}}}}, Pid, Ref) ->
+        ({ok, _}, Pid, Ref) ->
             Pid ! {error, Ref, removing},
             util_lock:wakeup_with_report({NewKey, Level}, removing)
     end,
@@ -435,7 +435,7 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
 
     io:format("join ~p~n", [Level]),
     case gen_server:call(InitNode, {InitKey, {'join-process-0', {whereis(?MODULE), NewKey, MVector}}, Level}, ?TIMEOUT) of
-        {exist, {Node, Key}} ->
+        {exist, {_Node, _Key}} ->
             pass;
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
             [NextPeer, NextOtherPeer] = JoinProcess(SmallerPeer, BiggerPeer, Pid, Ref),
@@ -453,51 +453,36 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
 
 remove(Key) ->
     case ets:lookup(peer_table, Key) of
-        [] ->
-            {error, noexist};
-
+        [] -> {error, noexist};
         [{Key, _}] ->
             F = fun(Item) ->
                     case Item of
                         [] ->
                             {ok, {Key, {{join, ?LEVEL_MAX}, {remove, ?LEVEL_MAX}}}};
-
                         [{Key, {{join, Max}, {remove, _}}}] ->
                             case Max of
-                                -1 ->
-                                    {delete, Key};
-                                _ ->
-                                    {ok, {Key, {{join, Max}, {remove, Max}}}}
+                                -1 -> {delete, Key};
+                                _  -> {ok, {Key, {{join, Max}, {remove, Max}}}}
                             end
                     end
             end,
-
-            util_lock:ets_lock(incomplete_table, Key, F)
-    end,
-
-    remove(Key, ?LEVEL_MAX - 1).
+            util_lock:ets_lock(incomplete_table, Key, F),
+            remove(Key, ?LEVEL_MAX - 1)
+    end.
 
 remove(Key, -1) ->
     ets:delete(peer_table, Key);
 remove(Key, Level) ->
-    Result = gen_server:call(?MODULE,
-        {Key,
-            {'remove-process-1',
-                {Key}},
-            Level}),
-
+    Result = gen_server:call(?MODULE, {Key, {'remove-process-1', {Key}}, Level}),
     case Result of
         {already} ->
             {error, 'already-removing'};
-
         {ok, removed} ->
             util_lock:set_neighbor(Key, {nil, nil}, Level),
-
-            F = fun([{Key, {{join, _N}, {remove, Level}}}]) ->
+            F = fun([{_Key, {{join, _N}, {remove, _Level}}}]) ->
                     {ok, {Key, {{join, _N}, {remove, Level - 1}}}}
             end,
             util_lock:ets_lock(incomplete_table, Key, F),
-
             remove(Key, Level - 1)
     end.
 
