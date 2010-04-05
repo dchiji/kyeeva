@@ -144,21 +144,21 @@ set_neighbor(Key, {Server, NewKey}, Level) ->
 set_neighbor_1([New], []) ->
     {ok, New};
 set_neighbor_1([{Key, {nil, nil}, Level}], [{Key, Pstate}]) ->
-    {SFront, [_ | STail]} = lists:split(Level, Pstate#pstate.smaller),
-    {BFront, [_ | BTail]} = lists:split(Level, Pstate#pstate.bigger),
+    {SFront, [_ | STail]} = lists:split(Level - 1, Pstate#pstate.smaller),
+    {BFront, [_ | BTail]} = lists:split(Level - 1, Pstate#pstate.bigger),
     NewPstate = Pstate#pstate{
         smaller = SFront ++ [{nil, nil} | STail],
         bigger = BFront ++ [{nil, nil} | BTail]
     },
     {ok, {Key, NewPstate}};
 set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, Pstate}]) when Key > NewKey ->
-    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Pstate#pstate.smaller),
+    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level - 1, Pstate#pstate.smaller),
     NewPstate = Pstate#pstate{
         smaller = Front ++ [{Server, NewKey} | Tail]
     },
     {ok, {Key, NewPstate}};
 set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, Pstate}]) when Key < NewKey ->
-    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level, Pstate#pstate.bigger),
+    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level - 1, Pstate#pstate.bigger),
     NewPstate = Pstate#pstate{
         bigger = Front ++ [{Server, NewKey} | Tail]
     },

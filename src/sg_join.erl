@@ -57,6 +57,7 @@ process_0(MyKey, From, Server, NewKey, MVector, Level) ->
 
 process_0_1(MyKey, From, Server, NewKey, MVector, Level) when MyKey == NewKey ->
     [{MyKey, MyPstate}] = ets:lookup(peer_table, MyKey),
+    io:format("~n~npstate.smaller=~p~n~n~n", [MyPstate#pstate.smaller]),
     case lists:nth(Level - 1, MyPstate#pstate.smaller) of
         {nil, nil}          -> gen_server:reply(From, {error, mismatch});
         {BestNode, BestKey} -> gen_server:call(BestNode, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})

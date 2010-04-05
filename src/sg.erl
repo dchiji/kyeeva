@@ -89,7 +89,8 @@ init(Arg) ->
 
 
 handle_call({peer, random}, _From, State) ->
-    [{SelfKey, {_, _}} | _] = ets:tab2list(peer_table),
+    [{SelfKey, _} | _] = ets:tab2list(peer_table),
+    io:format("~n~n~n~n~nmatch ok~n~n~n~n~n"),
     {reply, {self(), SelfKey}, State};
 
 
@@ -387,6 +388,8 @@ join(ParentKey, {Attribute, Key}) ->
 join(InitPeer, Key, MVector) ->
     join(InitPeer, Key, MVector, 1, {nil, nil}).
 
+join({nil, nil}, _, _, _, _) ->
+    ok;
 join(_, Key, _, ?LEVEL_MAX, _) ->
     DeleteIncompleteElementCallback = fun
         ([])                                           -> {pass};
@@ -401,7 +404,7 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
         ([{Key, {{join, JLevel}, {remove, RLevel}}}]) -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
     end,
     IncrLevelCallback = fun
-        ([{Key, {{join, _}, {remove, -1}}}]) -> {ok, {Key, {{join, Level}, {remove, ?LEVEL_MAX}}}};
+        ([{Key, {{join, _}, {remove, -1}}}]) -> {ok, {Key, {{join, Level}, {remove, -1}}}};
         ([{Key, {{join, JLevel}, {remove, RLevel}}}])     -> {ok, {Key, {{join, JLevel}, {remove, RLevel}}}}
     end,
     IncrLevel = fun() -> util_lock:ets_lock(incomplete_table, NewKey, IncrLevelCallback) end,
@@ -436,11 +439,14 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
     io:format("join ~p~n", [Level]),
     case gen_server:call(InitNode, {InitKey, {'join-process-0', {whereis(?MODULE), NewKey, MVector}}, Level}, ?TIMEOUT) of
         {exist, {_Node, _Key}} ->
+            io:format("~n~nexist~n~n~n"),
             pass;
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
             [NextPeer, NextOtherPeer] = JoinProcess(SmallerPeer, BiggerPeer, Pid, Ref),
+            io:format("~n~nNextPeer=~p~n~n~n", [NextPeer]),
             join(NextPeer, NewKey, MVector, Level + 1, NextOtherPeer);
         {error, mismatch} ->
+            io:format("~n~nerror mismatch~n~n~n"),
             case OtherPeer of
                 {nil, nil} -> util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElementCallback);
                 _          -> join(OtherPeer, NewKey, MVector, Level, {nil, nil})
