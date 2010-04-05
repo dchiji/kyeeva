@@ -4,7 +4,8 @@
 -export([make/0,
         is_equal/2,
         is_equal/3,
-        nth/2]).
+        nth/2,
+        io_binary/1]).
 
 -include("../include/common.hrl").
 
@@ -41,3 +42,15 @@ is_equal(MVector1, MVector2, Level) ->
     B1 = nth(Level, MVector1),
     B2 = nth(Level, MVector2),
     B1 == B2.
+
+
+io_binary(MV) ->
+    io_binary_1(MV, ?LEVEL_MAX),
+    io:format("~n").
+
+io_binary_1(_, 0) -> ok;
+io_binary_1(MV, Size) ->
+    TailN = Size - 8,
+    <<Byte, MV1/binary>> = MV,
+    io:format("~.2B", [Byte]),
+    io_binary_1(MV1, TailN).

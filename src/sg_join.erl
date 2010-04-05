@@ -132,8 +132,8 @@ process_1(MyKey, From, Server, NewKey, MVector, Level) ->
             %% find the node which matchs a Nth bit of membership-vector
             Peer = case Level of
                 1                     -> error;    %% Levelが1の時は必ずMVectorが一致するはずなのでありえない
-                _ when NewKey < MyKey -> lists:nth(Level, MyPstate#pstate.bigger);
-                _ when NewKey > MyKey -> lists:nth(Level, MyPstate#pstate.smaller)
+                _ when NewKey < MyKey -> lists:nth(Level - 1, MyPstate#pstate.bigger);
+                _ when NewKey > MyKey -> lists:nth(Level - 1, MyPstate#pstate.smaller)
             end,
             case Peer of
                 {nil, nil}          -> gen_server:reply(From, {error, mismatch});

@@ -443,7 +443,7 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
             pass;
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
             [NextPeer, NextOtherPeer] = JoinProcess(SmallerPeer, BiggerPeer, Pid, Ref),
-            io:format("~n~nNextPeer=~p~n~n~n", [NextPeer]),
+            io:format("~n~nNextPeer=~p~n~n=n", [NextPeer]),
             join(NextPeer, NewKey, MVector, Level + 1, NextOtherPeer);
         {error, mismatch} ->
             io:format("~n~nerror mismatch~n~n~n"),
@@ -523,7 +523,10 @@ get(Key0, Key1, AttributeList) ->
 
 
 test() ->
-    io:format("~nPeers = ~p~n", [ets:tab2list(peer_table)]).
+    io:format("~nPeers = ~p~n", [ets:tab2list(peer_table)]),
+    io:format("~n"),
+    [util_mvector:io_binary(Pstate#pstate.mvector) || {Key, Pstate} <- ets:tab2list(peer_table)],
+    io:format("~n").
 
 
 get_server() ->
