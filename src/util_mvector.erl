@@ -7,7 +7,7 @@
         nth/2,
         io_binary/1]).
 
--include("../include/common.hrl").
+-include("../include/common_sg.erl").
 
 
 make() ->

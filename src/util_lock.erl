@@ -26,7 +26,7 @@
 
 -module(util_lock).
 
--include("../include/common.hrl").
+-include("../include/common_sg.erl").
 
 %% process transaction
 -export([wakeup_init/0,

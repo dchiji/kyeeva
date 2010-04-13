@@ -29,7 +29,7 @@
 -export([process_0/6,
         process_1/6]).
 
--include("../include/common.hrl").
+-include("../include/common_sg.erl").
 
 -define(TIMEOUT, infinity).
 

@@ -34,7 +34,7 @@
 
 -behaviour(gen_server).
 
--include("../include/common.hrl").
+-include("../include/common_sg.erl").
 
 %% API
 -export([get_server/0,
