@@ -26,7 +26,7 @@
 
 -module(util).
 
--include("../include/common_sg.erl").
+-include("../include/common_sg.hrl").
 
 -export([select_best/3]).
 
