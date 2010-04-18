@@ -24,7 +24,7 @@
 %%    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
--module(sg).
+-module(sg_server).
 
 -behaviour(gen_server).
 
@@ -66,7 +66,7 @@ start(InitNode) ->
 
 
 put(ParentKey, KeyList) ->
-    ets:insert('Attributes', {ParentKey, [Attribute || {Attribute, _} <- KeyList]}),
+    ets:insert(attribute_table, {ParentKey, [Attribute || {Attribute, _} <- KeyList]}),
     lists:foreach(fun(Key) -> join(ParentKey, Key) end, KeyList).
 
 
@@ -110,8 +110,8 @@ join(ParentKey, {Attribute, Key}) ->
                 bigger = Bigger
             },
             ets:insert(peer_table, {{{Attribute, Key}, ParentKey}, NewPstate}),
-            ets:insert('Attributes', {ParentKey, Attribute}),
-            ets:insert('Attributes', {{ParentKey, Attribute}, Key})
+            ets:insert(attribute_table, {ParentKey, Attribute}),
+            ets:insert(attribute_table, {{ParentKey, Attribute}, Key})
     end,
 
     case ets:lookup(peer_table, {{Attribute, Key}, ParentKey}) of
@@ -249,16 +249,23 @@ remove(Key, Level) ->
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
 init(Arg) ->
-    PeerTable = ets:new(peer_table, [ordered_set, public, named_table]),
-    ets:new('Attributes', [set, public, named_table]),
-    ets:new(incomplete_table, [set, public, named_table]),
-    ets:new(node_ets_table, [set, public, named_table]),
-    ets:insert(node_ets_table, {?MODULE, PeerTable}),
-
+    spawn(fun init_tables/2, [Ref=make_ref(), self()]),
+    receive {ok, Ref} -> ok end,
     util_lock:lock_init([lockdaemon_join_table, lockdaemon_ets_table]),
     util_lock:wakeup_init(),
-
     {ok, Arg}.
+
+init_tables(Ref, Return) ->
+    case catch ets:lookup(node_ets_table, ?MODULE) of
+        {'EXIT', {badarg, _}} ->
+            ets:new(peer_table, [ordered_set, public, named_table]),
+            ets:new(attribute_table, [set, public, named_table]),
+            ets:new(incomplete_table, [set, public, named_table]),
+            ets:new(node_ets_table, [set, public, named_table]);
+        _ -> ok
+    end,
+    Return ! {ok, Ref},
+    receive after infinity -> loop end.
 
 
 %%--------------------------------------------------------------------
