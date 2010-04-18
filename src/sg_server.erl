@@ -525,7 +525,7 @@ get(Key0, Key1, AttributeList) ->
 test() ->
     io:format("~nPeers = ~p~n", [ets:tab2list(peer_table)]),
     io:format("~n"),
-    [util_mvector:io_binary(Pstate#pstate.mvector) || {Key, Pstate} <- ets:tab2list(peer_table)],
+    [util_mvector:io_binary(Pstate#pstate.mvector) || {_, Pstate} <- ets:tab2list(peer_table)],
     io:format("~n").
 
 

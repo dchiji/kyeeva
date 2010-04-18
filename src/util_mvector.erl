@@ -13,7 +13,7 @@
 make() ->
     {A1, A2, A3} = now(),
     random:seed(erlang:phash2(A1), erlang:phash2(A2), erlang:phash2(A3)),
-    FirstEightBit = make_lsb_zero(random:uniform(256) - 1).
+    make_lsb_zero(random:uniform(256) - 1).
 
 make(MVector, 0.0) ->
     MVector;
