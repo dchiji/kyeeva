@@ -24,12 +24,6 @@
 %%    NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS 
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-%%    TODO
-%%
-%%      * {join, NewKey}で，適当なピアの選択時にNewKeyを有効活用する
-%%      * join中にサーバが再起動した場合の処理
-%%      * get時に死んだノードを発見した場合の処理
-
 -module(sg).
 
 -behaviour(gen_server).
@@ -61,298 +55,49 @@
 -define(TIMEOUT, infinity).
 
 
-start(Initial) ->
-    case Initial of
-        nil ->
-            gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], [{debug, [trace]}]);
-        _ ->
-            InitialNode = rpc:call(Initial, ?MODULE, get_server, []),
-            gen_server:start_link({local, ?MODULE}, ?MODULE, [InitialNode, util_mvector:make()], [{debug, [trace, log]}])
+%%====================================================================
+%% API
+%%====================================================================
+start(InitNode) ->
+    case InitNode of
+        nil -> gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], [{debug, [trace]}]);
+        _ -> gen_server:start_link({local, ?MODULE}, ?MODULE, [rpc:call(InitNode, ?MODULE, get_server, []), util_mvector:make()], [{debug, [trace, log]}])
     end.
 
 
-%%====================================================================
-%% gen_server callbacks
-%%====================================================================
+put(ParentKey, KeyList) ->
+    ets:insert('Attributes', {ParentKey, [Attribute || {Attribute, _} <- KeyList]}),
+    lists:foreach(fun(Key) -> join(ParentKey, Key) end, KeyList).
 
-init(Arg) ->
-    PeerTable = ets:new(peer_table, [ordered_set, public, named_table]),
-    ets:new('Attributes', [set, public, named_table]),
-    ets:new(incomplete_table, [set, public, named_table]),
-    ets:new(node_ets_table, [set, public, named_table]),
-    ets:insert(node_ets_table, {?MODULE, PeerTable}),
 
-    util_lock:lock_init([lockdaemon_join_table, lockdaemon_ets_table]),
-    util_lock:wakeup_init(),
+get(Key) ->
+    get(Key, [value]).
 
-    {ok, Arg}.
+get(Key, AttributeList) ->
+    sg_lookup:call(?MODULE, Key, Key, AttributeList).
 
+get(Key0, Key1, AttributeList) when Key1 < Key0 ->
+    get(Key1, Key0, AttributeList);
+get(Key0, Key1, AttributeList) ->
+    sg_lookup:call(?MODULE, Key0, Key1, AttributeList).
 
-handle_call({peer, random}, _From, State) ->
-    [{SelfKey, _} | _] = ets:tab2list(peer_table),
-    io:format("~n~n~n~n~nmatch ok~n~n~n~n~n"),
-    {reply, {self(), SelfKey}, State};
 
+test() ->
+    io:format("~nPeers = ~p~n", [ets:tab2list(peer_table)]),
+    io:format("~n"),
+    [util_mvector:io_binary(Pstate#pstate.mvector) || {_, Pstate} <- ets:tab2list(peer_table)],
+    io:format("~n").
 
-handle_call({'get-ets-table'}, _From, State) ->
-    io:format("get-ets-table~n"),
-    [{?MODULE, Tab}] = ets:lookup(node_ets_table, ?MODULE),
-    {reply, Tab, State};
 
+get_server() ->
+    whereis(?MODULE).
 
-%% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
-handle_call({_Key, {put, _ParentKey}}, _From, State) ->
-    %%
-    %% TODO
-    %%
-    {reply, ok, State};
 
-
-%% lookupメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，lookup_process_0に繋げる．
-handle_call({lookup, Key0, Key1, AttributeList, From}, _From, [InitialNode | Tail]) ->
-    Ref = make_ref(),
-    spawn_link(sg_lookup,lookup, [InitialNode, Key0, Key1, AttributeList, {Ref, From}]),
-    {reply, Ref, [InitialNode | Tail]};
-
-
-%% 最適なピアを探索する．
-handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From}}}, _From, State) ->
-    spawn_link(sg_lookup, process_0, [SelfKey, Key0, Key1, AttributeList, From]),
-    {reply, nil, State};
-
-
-%% 指定された範囲内を走査し，値を収集する．
-handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, AttributeList, From}}},
-    _From,
-    State) ->
-
-    spawn_link(fun() ->
-                sg_lookup:process_1(SelfKey, Key0, Key1, AttributeList, From)
-        end),
-    {noreply, State};
-
-
-%% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す．
-handle_call({'select-first-peer', _NewKey}, From, [InitialNode | Tail]) ->
-    PeerList = ets:tab2list(peer_table),
-    case PeerList of
-        [] ->
-            case InitialNode of
-                nil -> gen_server:reply(From, {ok, {nil, nil}});
-                _ ->
-                    {_, Key} = gen_server:call(InitialNode, {peer, random}),
-                    gen_server:reply(From, {ok, {InitialNode, Key}})
-            end;
-        _ ->
-            [{SelfKey, _} | _] = PeerList,
-            gen_server:reply(From, {ok, {self(), SelfKey}})
-    end,
-    {noreply, [InitialNode | Tail]};
-
-
-%% join-process-0にFromを渡して再度呼ぶ．
-handle_call({SelfKey, {'join-process-0', {Server, NewKey, MVector}}, Level}, From, State) ->
-    spawn_link(gen_server, call, [self(), {SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level}]),
-    {noreply, State};
-
-%% sg_join:process_0/3関数をutil_lock:join_lockに与える
-handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
-    F = fun() ->
-            sg_join:process_0(SelfKey, From, Server, NewKey, MVector, Level)
-    end,
-    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
-    {reply, nil, State};
-
-
-%% ネットワーク先ノードから呼び出されるために存在する．
-%% sg_join:process_1を，他の処理をlockして呼び出す．
-handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
-    F = fun() ->
-            sg_join:process_1(SelfKey, From, Server, NewKey, MVector, Level)
-    end,
-    %util_lock:join_lock({SelfKey, Level}, F),
-    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
-    {reply, nil, State};
-
-
-%% join-process-0-onewayにFromを渡して再度呼び出す．
-handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MVector}}, Level}, From, State) ->
-    spawn_link(gen_server, call, [self(), {SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}]),
-    {noreply, State};
-
-%% sg_join:process_0_oneway/3関数をutil_lock:join_lockに与える
-handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
-    F = fun() ->
-            sg_join:process_0_oneway(SelfKey, From, Server, NewKey, MVector, Level)
-    end,
-    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
-    %util_lock:join_lock({SelfKey, Level}, F),
-    {noreply, State};
-
-
-%% sg_join:process_1_oneway/3関数を呼び出す．ローカルからこのコールバック関数を呼び出すことはほとんどない．
-handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
-    F = fun() ->
-            sg_join:process_1_oneway(SelfKey, From, Server, NewKey, MVector, Level)
-    end,
-    %util_lock:join_lock({SelfKey, Level}, F),
-    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
-    {reply, nil, State};
-
-
-%% ローカルで呼び出すことはない．Neighborをupdateする．
-handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other}, _From, State) ->
-    Self = self(),
-    F = fun() ->
-            Ref = make_ref(),
-            util_lock:set_neighbor(SelfKey, {Server, NewKey}, Level),
-            if
-                NewKey < SelfKey -> gen_server:reply(From, {ok, {Other, {Self, SelfKey}}, {self(), Ref}});
-                SelfKey < NewKey -> gen_server:reply(From, {ok, {{Self, SelfKey}, Other}, {self(), Ref}})
-            end,
-            % reply先がNeighborの更新に成功するまで待機
-            receive
-                {ok, Ref} ->
-                    ok
-            end,
-            case ets:lookup(node_ets_table, Server) of
-                [] -> spawn_link(fun() -> ets:insert(node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}) end);
-                _  -> ok
-            end
-    end,
-    util_lock:join_lock({SelfKey, Level}, F),
-    {reply, nil, State};
-
-
-%% remove-process-0にFromを渡して再度呼ぶ．
-handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level},
-    From,
-    State) ->
-
-    Self = self(),
-
-    spawn_link(fun() ->
-                gen_server:call(Self,
-                    {SelfKey,
-                        {'remove-process-0',
-                            {From,
-                                RemovedKey}},
-                        Level})
-        end),
-
-    {noreply, State};
-
-%% sg_remove:process_0/3関数をutil_lock:join_lockに与える
-handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level},
-    _From,
-    State) ->
-
-    F = fun() ->
-            sg_remove:process_0(SelfKey,
-                {From,
-                    RemovedKey},
-                Level)
-    end,
-
-    util_lock:join_lock({SelfKey, Level}, F),
-    {reply, nil, State};
-
-
-%% remove-process-1にFromを渡して再度呼ぶ．
-handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level},
-    From,
-    State) ->
-
-    Self = self(),
-
-    spawn_link(fun() ->
-                gen_server:call(Self,
-                    {SelfKey,
-                        {'remove-process-1',
-                            {From,
-                                RemovedKey}},
-                        Level})
-        end),
-
-    {noreply, State};
-
-%% ネットワーク先ノードから呼び出されるために存在する．
-%% sg_remove:process_1を，他の処理をlockして呼び出す．
-handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level},
-    _From,
-    State) ->
-
-    F = fun() ->
-            sg_remove:process_1(SelfKey,
-                {From,
-                    RemovedKey},
-                Level)
-    end,
-
-    util_lock:join_lock({SelfKey, Level}, F),
-    {reply, nil, State};
-
-
-%% ネットワーク先ノードから呼び出されるために存在する．
-%% sg_remove:process_2を，他の処理をlockして呼び出す．
-handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Level},
-    _From,
-    State) ->
-
-    F = fun() ->
-            sg_remove:process_2(SelfKey,
-                {From,
-                    RemovedKey},
-                NewNeighbor,
-                Level)
-    end,
-
-    util_lock:join_lock({SelfKey, Level}, F),
-    {reply, nil, State};
-
-
-%% ネットワーク先ノードから呼び出されるために存在する．
-%% sg_remove:process_3を，他の処理をlockして呼び出す．
-handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Level},
-    _From,
-    State) ->
-
-    sg_remove:process_3(SelfKey, {From, RemovedKey}, NewNeighbor, Level),
-    {reply, nil, State}.
-
-
-%% gen_server内でエラーが発生したとき，再起動させる．
-%% 今のところ正常に動作しないが，デバッグなどに便利なので絶賛放置中
-terminate(_Reason, State) ->
-    io:format("~p~n", [_Reason]),
-    spawn(fun() ->
-                test(),
-                unregister(?MODULE),
-                gen_server:start_link({local, ?MODULE}, ?MODULE, State, [{debug, [trace, log]}])
-        end),
-    ok.
-
-
-handle_cast(_Message, State) ->
-    {noreply, State}.
-
-
-handle_info(_Info, State) ->
-    {noreply, State}.
-
-
-code_change(_OldVsn, State, _NewVsn) ->
-    {ok, State}.
-
-
-
-%%====================================================================
-%% Interfaces
-%%====================================================================
+get_peer() ->
+    ets:tab2list(peer_table).
 
 
 %% 新しいピアをjoinする
-
 join(Key) ->
     join(nil, {nil, Key}).
 
@@ -397,7 +142,7 @@ join(_, Key, _, ?LEVEL_MAX, _) ->
         ([{Key1, {{join, JLevel}, {remove, RLevel}}}]) -> {ok, {Key1, {{join, JLevel}, {remove, RLevel}}}}
     end,
     util_lock:ets_lock(incomplete_table, Key, DeleteIncompleteElementCallback);
-join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
+join({InitServer, InitKey}, NewKey, MVector, Level, OtherPeer) ->
     DeleteIncompleteElementCallback = fun
         ([])                                          -> {pass};
         ([{Key, {_, {remove, -1}}}])          -> {delete, Key};
@@ -437,8 +182,8 @@ join({InitNode, InitKey}, NewKey, MVector, Level, OtherPeer) ->
     end,
 
     io:format("join ~p~n", [Level]),
-    case gen_server:call(InitNode, {InitKey, {'join-process-0', {whereis(?MODULE), NewKey, MVector}}, Level}, ?TIMEOUT) of
-        {exist, {_Node, _Key}} ->
+    case gen_server:call(InitServer, {InitKey, {'join-process-0', {whereis(?MODULE), NewKey, MVector}}, Level}, ?TIMEOUT) of
+        {exist, {_Server, _Key}} ->
             io:format("~n~nexist~n~n~n"),
             pass;
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
@@ -493,46 +238,215 @@ remove(Key, Level) ->
     end.
 
 
+%%====================================================================
+%% gen_server callbacks
+%%====================================================================
 %%--------------------------------------------------------------------
-%% Function: put
-%% Description(ja): 値をputする
-%% Description(en): put value
-%% Returns: ok | {error, Reason}
+%% Function: init(Args) -> {ok, State} |
+%%                         {ok, State, Timeout} |
+%%                         ignore               |
+%%                         {stop, Reason}
+%% Description: Initiates the server
 %%--------------------------------------------------------------------
-put(ParentKey, KeyList) ->
-    ets:insert('Attributes', {ParentKey, [Attribute || {Attribute, _} <- KeyList]}),
-    lists:foreach(fun(Key) -> join(ParentKey, Key) end, KeyList).
+init(Arg) ->
+    PeerTable = ets:new(peer_table, [ordered_set, public, named_table]),
+    ets:new('Attributes', [set, public, named_table]),
+    ets:new(incomplete_table, [set, public, named_table]),
+    ets:new(node_ets_table, [set, public, named_table]),
+    ets:insert(node_ets_table, {?MODULE, PeerTable}),
+
+    util_lock:lock_init([lockdaemon_join_table, lockdaemon_ets_table]),
+    util_lock:wakeup_init(),
+
+    {ok, Arg}.
 
 
 %%--------------------------------------------------------------------
-%% Function: get
-%% Description(ja): 値をgetする
-%% Description(en): get value
-%% Returns: {ok, [{Key, Value}, ...]} | {error, Reason}
+%% Function: handle_call(Request, From, State) -> {reply, Reply, State} |
+%%                                                {reply, Reply, State, Timeout} |
+%%                                                {noreply, State} |
+%%                                                {noreply, State, Timeout} |
+%%                                                {stop, Reason, Reply, State} |
+%%                                                {stop, Reason, State}
+%% Description: Handling call messages
 %%--------------------------------------------------------------------
-get(Key) ->
-    get(Key, [value]).
+handle_call({peer, random}, _From, State) ->
+    [{SelfKey, _} | _] = ets:tab2list(peer_table),
+    io:format("~n~n~n~n~nmatch ok~n~n~n~n~n"),
+    {reply, {self(), SelfKey}, State};
 
-get(Key, AttributeList) ->
-    sg_lookup:call(?MODULE, Key, Key, AttributeList).
+handle_call({'get-ets-table'}, _From, State) ->
+    io:format("get-ets-table~n"),
+    [{?MODULE, Tab}] = ets:lookup(node_ets_table, ?MODULE),
+    {reply, Tab, State};
 
-get(Key0, Key1, AttributeList) when Key1 < Key0 ->
-    get(Key1, Key0, AttributeList);
-get(Key0, Key1, AttributeList) ->
-    sg_lookup:call(?MODULE, Key0, Key1, AttributeList).
+%% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
+handle_call({_Key, {put, _ParentKey}}, _From, State) ->
+    %%
+    %% TODO
+    %%
+    {reply, ok, State};
+
+%% lookupメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，lookup_process_0に繋げる．
+handle_call({lookup, Key0, Key1, AttributeList, From}, _From, [InitServer | Tail]) ->
+    spawn_link(sg_lookup,lookup, [InitServer, Key0, Key1, AttributeList, {Ref=make_ref(), From}]),
+    {reply, Ref, [InitServer | Tail]};
+
+%% 最適なピアを探索する．
+handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From}}}, _From, State) ->
+    spawn_link(sg_lookup, process_0, [SelfKey, Key0, Key1, AttributeList, From]),
+    {reply, nil, State};
+
+%% 指定された範囲内を走査し，値を収集する．
+handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, AttributeList, From}}}, _From, State) ->
+    spawn_link(sg_lookup, process_1, [SelfKey, Key0, Key1, AttributeList, From]),
+    {noreply, State};
+
+%% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す．
+handle_call({'select-first-peer', _NewKey}, From, [InitServer | Tail]) ->
+    case ets:tab2list(peer_table) of
+        [{SelfKey, _} | _]-> gen_server:reply(From, {ok, {self(), SelfKey}});
+        [] ->
+            case InitServer of
+                nil -> gen_server:reply(From, {ok, {nil, nil}});
+                _ ->
+                    {_, Key} = gen_server:call(InitServer, {peer, random}),
+                    gen_server:reply(From, {ok, {InitServer, Key}})
+            end
+    end,
+    {noreply, [InitServer | Tail]};
+
+%% join-process-0にFromを渡して再度呼ぶ．
+handle_call({SelfKey, {'join-process-0', {Server, NewKey, MVector}}, Level}, From, State) ->
+    spawn_link(gen_server, call, [self(), {SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level}]),
+    {noreply, State};
+
+%% sg_join:process_0/3関数をutil_lock:join_lockに与える
+handle_call({SelfKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
+    F = fun() -> sg_join:process_0(SelfKey, From, Server, NewKey, MVector, Level) end,
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
+    {reply, nil, State};
+
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% sg_join:process_1を，他の処理をlockして呼び出す．
+handle_call({SelfKey, {'join-process-1', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
+    F = fun() -> sg_join:process_1(SelfKey, From, Server, NewKey, MVector, Level) end,
+    %util_lock:join_lock({SelfKey, Level}, F),
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
+    {reply, nil, State};
+
+%% join-process-0-onewayにFromを渡して再度呼び出す．
+handle_call({SelfKey, {'join-process-0-oneway', {Server, NewKey, MVector}}, Level}, From, State) ->
+    spawn_link(gen_server, call, [self(), {SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}]),
+    {noreply, State};
+
+%% sg_join:process_0_oneway/3関数をutil_lock:join_lockに与える
+handle_call({SelfKey, {'join-process-0-oneway', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
+    F = fun() -> sg_join:process_0_oneway(SelfKey, From, Server, NewKey, MVector, Level) end,
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
+    %util_lock:join_lock({SelfKey, Level}, F),
+    {noreply, State};
+
+%% sg_join:process_1_oneway/3関数を呼び出す．ローカルからこのコールバック関数を呼び出すことはほとんどない．
+handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, MVector}}, Level}, _From, State) ->
+    F = fun() -> sg_join:process_1_oneway(SelfKey, From, Server, NewKey, MVector, Level) end,
+    %util_lock:join_lock({SelfKey, Level}, F),
+    spawn_link(util_lock, join_lock, [{SelfKey, Level}, F]),
+    {reply, nil, State};
+
+%% ローカルで呼び出すことはない．Neighborをupdateする．
+handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other}, _From, State) ->
+    Self = self(),
+    F = fun() ->
+            Ref = make_ref(),
+            util_lock:set_neighbor(SelfKey, {Server, NewKey}, Level),
+            if
+                NewKey < SelfKey -> gen_server:reply(From, {ok, {Other, {Self, SelfKey}}, {self(), Ref}});
+                SelfKey < NewKey -> gen_server:reply(From, {ok, {{Self, SelfKey}, Other}, {self(), Ref}})
+            end,
+            % reply先がNeighborの更新に成功するまで待機
+            receive
+                {ok, Ref} ->
+                    case ets:lookup(node_ets_table, Server) of
+                        [] -> spawn_link(fun() -> ets:insert(node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}) end);
+                        _  -> ok
+                    end
+            end
+    end,
+    util_lock:join_lock({SelfKey, Level}, F),
+    {reply, nil, State};
+
+%% remove-process-0にFromを渡して再度呼ぶ．
+handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level}, From, State) ->
+    spawn_link(gen_server, call, [self(), {SelfKey, {'remove-process-0', {From, RemovedKey}}, Level}]),
+    {noreply, State};
+
+%% sg_remove:process_0/3関数をutil_lock:join_lockに与える
+handle_call({SelfKey, {'remove-process-0', {From, RemovedKey}}, Level}, _From, State) ->
+    F = fun() -> sg_remove:process_0(SelfKey, {From, RemovedKey}, Level) end,
+    util_lock:join_lock({SelfKey, Level}, F),
+    {reply, nil, State};
+
+%% remove-process-1にFromを渡して再度呼ぶ．
+handle_call({SelfKey, {'remove-process-1', {RemovedKey}}, Level}, From, State) ->
+    spawn_link(gen_server, call, [self(), {SelfKey, {'remove-process-1', {From, RemovedKey}}, Level}]),
+    {noreply, State};
+
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% sg_remove:process_1を，他の処理をlockして呼び出す．
+handle_call({SelfKey, {'remove-process-1', {From, RemovedKey}}, Level}, _From, State) ->
+    F = fun() -> sg_remove:process_1(SelfKey, {From, RemovedKey}, Level) end,
+    util_lock:join_lock({SelfKey, Level}, F),
+    {reply, nil, State};
+
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% sg_remove:process_2を，他の処理をlockして呼び出す．
+handle_call({SelfKey, {'remove-process-2', {From, RemovedKey}}, NewNeighbor, Level}, _From, State) ->
+    F = fun() -> sg_remove:process_2(SelfKey, {From, RemovedKey}, NewNeighbor, Level) end,
+    util_lock:join_lock({SelfKey, Level}, F),
+    {reply, nil, State};
+
+%% ネットワーク先ノードから呼び出されるために存在する．
+%% sg_remove:process_3を，他の処理をlockして呼び出す．
+handle_call({SelfKey, {'remove-process-3', {From, RemovedKey}}, NewNeighbor, Level}, _From, State) ->
+    sg_remove:process_3(SelfKey, {From, RemovedKey}, NewNeighbor, Level),
+    {reply, nil, State}.
 
 
-test() ->
-    io:format("~nPeers = ~p~n", [ets:tab2list(peer_table)]),
-    io:format("~n"),
-    [util_mvector:io_binary(Pstate#pstate.mvector) || {_, Pstate} <- ets:tab2list(peer_table)],
-    io:format("~n").
+%%--------------------------------------------------------------------
+%% Function: handle_cast(Msg, State) -> {noreply, State} |
+%%                                      {noreply, State, Timeout} |
+%%                                      {stop, Reason, State}
+%% Description: Handling cast messages
+%%--------------------------------------------------------------------
+handle_cast(_Message, State) ->
+    {noreply, State}.
 
 
-get_server() ->
-    whereis(?MODULE).
+%%--------------------------------------------------------------------
+%% Function: handle_info(Info, State) -> {noreply, State} |
+%%                                       {noreply, State, Timeout} |
+%%                                       {stop, Reason, State}
+%% Description: Handling all non call/cast messages
+%%--------------------------------------------------------------------
+handle_info(_Info, State) ->
+    {noreply, State}.
 
 
-get_peer() ->
-    ets:tab2list(peer_table).
+%%--------------------------------------------------------------------
+%% Function: terminate(Reason, State) -> void()
+%% Description: This function is called by a gen_server when it is about to
+%% terminate. It should be the opposite of Module:init/1 and do any necessary
+%% cleaning up. When it returns, the gen_server terminates with Reason.
+%% The return value is ignored.
+%%--------------------------------------------------------------------
+terminate(_, _) ->
+    ok.
 
+
+%%--------------------------------------------------------------------
+%% Func: code_change(OldVsn, State, Extra) -> {ok, NewState}
+%% Description: Convert process state when code is changed
+%%--------------------------------------------------------------------
+code_change(_OldVsn, State, _NewVsn) ->
+    {ok, State}.

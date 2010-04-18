@@ -39,53 +39,53 @@ select_best([], _, _) ->
     {nil, nil};
 select_best([{nil, nil} | _], _, _) ->
     {nil, nil};
-select_best([{Node0, Key0} | _], Key, _) when Key0 == Key ->
-    {Node0, Key0};
-select_best([{Node0, Key0}], Key, S_or_B) when S_or_B == smaller ->
+select_best([{Server0, Key0} | _], Key, _) when Key0 == Key ->
+    {Server0, Key0};
+select_best([{Server0, Key0}], Key, S_or_B) when S_or_B == smaller ->
     if
         Key0 < Key ->
             {self, self};
         true ->
-            {Node0, Key0}
+            {Server0, Key0}
     end;
-select_best([{Node0, Key0}], Key, S_or_B) when S_or_B == bigger ->
+select_best([{Server0, Key0}], Key, S_or_B) when S_or_B == bigger ->
     if
         Key < Key0 ->
             {self, self};
         true ->
-            {Node0, Key0}
+            {Server0, Key0}
     end;
-select_best([{Node0, Key0}, {nil, nil} | _], Key, S_or_B) when S_or_B == smaller ->
+select_best([{Server0, Key0}, {nil, nil} | _], Key, S_or_B) when S_or_B == smaller ->
     if
         Key0 < Key ->
             {self, self};
         true ->
-            {Node0, Key0}
+            {Server0, Key0}
     end;
-select_best([{Node0, Key0}, {nil, nil} | _], Key, S_or_B) when S_or_B == bigger ->
+select_best([{Server0, Key0}, {nil, nil} | _], Key, S_or_B) when S_or_B == bigger ->
     if
         Key < Key0 ->
             {self, self};
         true ->
-            {Node0, Key0}
+            {Server0, Key0}
     end;
-select_best([{_Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B) when Key0 == Key1 ->    % rotate
-    select_best([{Node1, Key1} | Tail], Key, S_or_B);
-select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B) when S_or_B == smaller ->
+select_best([{_Server0, Key0}, {Server1, Key1} | Tail], Key, S_or_B) when Key0 == Key1 ->    % rotate
+    select_best([{Server1, Key1} | Tail], Key, S_or_B);
+select_best([{Server0, Key0}, {Server1, Key1} | Tail], Key, S_or_B) when S_or_B == smaller ->
     if
         Key0 < Key ->
             {self, self};
         Key1 < Key ->
-            {Node0, Key0};
+            {Server0, Key0};
         Key < Key0 ->
-            select_best([{Node1, Key1} | Tail], Key, S_or_B)
+            select_best([{Server1, Key1} | Tail], Key, S_or_B)
     end;
-select_best([{Node0, Key0}, {Node1, Key1} | Tail], Key, S_or_B) when S_or_B == bigger ->
+select_best([{Server0, Key0}, {Server1, Key1} | Tail], Key, S_or_B) when S_or_B == bigger ->
     if
         Key < Key0 ->
             {self, self};
         Key < Key1 ->
-            {Node0, Key0};
+            {Server0, Key0};
         true ->
-            select_best([{Node1, Key1} | Tail], Key, S_or_B)
+            select_best([{Server1, Key1} | Tail], Key, S_or_B)
     end.

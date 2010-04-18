@@ -152,13 +152,13 @@ set_neighbor_1([{Key, {nil, nil}, Level}], [{Key, Pstate}]) ->
     },
     {ok, {Key, NewPstate}};
 set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, Pstate}]) when Key > NewKey ->
-    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level - 1, Pstate#pstate.smaller),
+    {Front, [{_OldServer, _OldKey} | Tail]} = lists:split(Level - 1, Pstate#pstate.smaller),
     NewPstate = Pstate#pstate{
         smaller = Front ++ [{Server, NewKey} | Tail]
     },
     {ok, {Key, NewPstate}};
 set_neighbor_1([{Key, {Server, NewKey}, Level}], [{Key, Pstate}]) when Key < NewKey ->
-    {Front, [{_OldNode, _OldKey} | Tail]} = lists:split(Level - 1, Pstate#pstate.bigger),
+    {Front, [{_OldServer, _OldKey} | Tail]} = lists:split(Level - 1, Pstate#pstate.bigger),
     NewPstate = Pstate#pstate{
         bigger = Front ++ [{Server, NewKey} | Tail]
     },

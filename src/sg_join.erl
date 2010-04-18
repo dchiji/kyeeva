@@ -37,7 +37,6 @@
 %%--------------------------------------------------------------------
 %%  join process 0
 %%--------------------------------------------------------------------
-
 %% handle_call<join-process-0>から呼び出される．
 %% 最もNewKeyに近いピアを(内側に向かって)探索する．
 process_0(MyKey, From, Server, NewKey, MVector, Level) ->
@@ -60,7 +59,7 @@ process_0_1(MyKey, From, Server, NewKey, MVector, Level) when MyKey == NewKey ->
     io:format("~n~npstate.smaller=~p~n~n~n", [MyPstate#pstate.smaller]),
     case lists:nth(Level - 1, MyPstate#pstate.smaller) of
         {nil, nil}          -> gen_server:reply(From, {error, mismatch});
-        {BestNode, BestKey} -> gen_server:call(BestNode, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})
+        {BestServer, BestKey} -> gen_server:call(BestServer, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})
     end;
 process_0_1(MyKey, From, Server, NewKey, MVector, Level) ->
     [{MyKey, MyPstate}] = ets:lookup(peer_table, MyKey),
@@ -80,9 +79,9 @@ process_0_2(MyKey, From, Server, NewKey, MVector, 1=Level, Neighbor, S_or_B) ->
             %% go to next step (join_process_1)
             %% because I lock other process of MyKey, I use not gen_server:handle_call but function-call
             process_1(MyKey, From, Server, NewKey, MVector, Level);
-        {BestNode, BestKey} ->
+        {BestServer, BestKey} ->
             %% select the best peer and go on join_process_0
-            gen_server:call(BestNode, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})
+            gen_server:call(BestServer, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})
     end;
 process_0_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B) ->
     NextPeer = case ets:lookup(incomplete_table, MyKey) of
@@ -110,14 +109,13 @@ process_0_3(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B, _) ->
     case BestPeer of
         {nil, nil}          -> process_1(MyKey, From, Server, NewKey, MVector, Level);
         {self, self}        -> process_1(MyKey, From, Server, NewKey, MVector, Level);
-        {BestNode, BestKey} -> gen_server:call(BestNode, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})
+        {BestServer, BestKey} -> gen_server:call(BestServer, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})
     end.
 
 
 %%--------------------------------------------------------------------
 %%  join process 1
 %%--------------------------------------------------------------------
-
 %% process_0/3関数から呼び出される．
 %% MVector[Level]が一致するピアを外側に向かって探索．
 %% 成功したら自身のNeighborをutil_lock:set_neighborし，Anotherにもutil_lock:set_neighborメッセージを送信する．
@@ -137,7 +135,7 @@ process_1(MyKey, From, Server, NewKey, MVector, Level) ->
             end,
             case Peer of
                 {nil, nil}          -> gen_server:reply(From, {error, mismatch});
-                {NextNode, NextKey} -> gen_server:call(NextNode, {NextKey, {'join-process-1', {From, Server, NewKey, MVector}}, Level})
+                {NextServer, NextKey} -> gen_server:call(NextServer, {NextKey, {'join-process-1', {From, Server, NewKey, MVector}}, Level})
             end
     end.
 
