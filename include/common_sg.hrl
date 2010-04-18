@@ -18,5 +18,5 @@
 -ifdef(debug).
     -define(SERVER_MODULE, mock_sg_join).
 -else.
-    -define(SERVER_MODULE, sg).
+    -define(SERVER_MODULE, sg_server).
 -endif.
