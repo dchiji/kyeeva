@@ -23,5 +23,4 @@ mock: compile
 benchmark: compile
 	${ERL} -sname benchmark +P 4000000 -noshell -s benchmark benchmark
 clean:
-	rm -rf *.beam erl_crash.dump
-
+	rm -f ./*.beam ./erl_crash.dump; rm -f src/*.beam src/erl_crash.dump
