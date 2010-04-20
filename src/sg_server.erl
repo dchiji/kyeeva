@@ -51,6 +51,9 @@
         handle_info/2,
         code_change/3]).
 
+%% for spawn/3
+-export([init_tables/2]).
+
 %-define(TIMEOUT, 3000).
 -define(TIMEOUT, infinity).
 
@@ -249,7 +252,7 @@ remove(Key, Level) ->
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
 init(Arg) ->
-    spawn(fun init_tables/2, [Ref=make_ref(), self()]),
+    spawn(?MODULE, init_tables, [Ref=make_ref(), self()]),
     receive {ok, Ref} -> ok end,
     util_lock:lock_init([lockdaemon_join_table, lockdaemon_ets_table]),
     util_lock:wakeup_init(),
