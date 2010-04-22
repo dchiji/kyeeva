@@ -1,3 +1,6 @@
+
+%% TODO successor-list の更新処理の実装
+
 -module(chord_server).
 -behaviour(gen_server).
 
@@ -8,6 +11,7 @@
         start/1,
         get/1,
         put/2,
+        call/4,
         server/0]).
 
 %% spawned functions
@@ -49,6 +53,17 @@ put(Server, Key, Value) ->
     case gen_server:call(SelectedServer, {put_op, Key, Value}) of
         {error, not_me} -> put(SelectedServer, Key, Value);
         ok              -> ok
+    end.
+
+
+call(Key, ModuleName, FuncName, Args) ->
+    call(?MODULE, Key, ModuleName, FuncName, Args).
+
+call(Server, Key, ModuleName, FuncName, Args) ->
+    {SelectedServer, _} = gen_server:call(Server, {lookup_op, Key}),
+    case gen_server:call(SelectedServer, {call, Key, ModuleName, FuncName, Args}) of
+        {error, not_me} -> call(SelectedServer, Key, ModuleName, FuncName, Args);
+        Any             -> Any
     end.
 
 
@@ -111,6 +126,9 @@ handle_call({lookup_op, Key}, From, State) ->
 
 handle_call({put_op, Key, Value}, _, State) ->
     {reply, put_op(Key, Value, State#state.myhash, State#state.succlist), State};
+
+handle_call({call, Key, Module, Func, Args}, _, State) ->
+    {reply, call_op(Key, Module, Func, Args, State#state.myhash, State#state.succlist), State};
 
 handle_call(_, _, State) ->
     {noreply, State}.
@@ -282,35 +300,24 @@ lookup_op_1(Key, From) ->
 %% put operation
 %%--------------------------------------------------------------------
 put_op(Key, Value, MyHash, SuccList) ->
-    Hash = crypto:sha(term_to_binary(Key)),
-    {S_or_B, SuccList1, Len} = select_succlist(Hash, MyHash, SuccList),
-    put_op_1(S_or_B, Key, Value, Hash, SuccList1, Len, SuccList).
+    put_op_1(confirm(Key, MyHash, SuccList), Key, Value).
 
-put_op_1(bigger, Key, Value, _, SuccList, Len, _) when SuccList == [] orelse Len == 0 ->
-    put_op_2(Key, Value);
-put_op_1(smaller, Key, Value, _, SuccList, Len, SuccListRecord) when SuccList == [] orelse Len == 0 ->
-    put_op_biggest(Key, Value, SuccListRecord#succlist.bigger_len);
-put_op_1(bigger, Key, Value, Hash, SuccList, _, _) ->
-    {_, NextHash} = lists:nth(1, SuccList),
-    if
-        Hash < NextHash  -> put_op_2(Key, Value);
-        Hash >= NextHash -> {error, not_me}
-    end;
-put_op_1(smaller, Key, Value, Hash, SuccList, _, SuccListRecord) ->
-    {_, NextHash} = lists:nth(1, SuccList),
-    if
-        Hash > NextHash  -> put_op_2(Key, Value);
-        Hash =< NextHash -> put_op_biggest(Key, Value, SuccListRecord#succlist.bigger_len)
-    end.
-
-put_op_biggest(Key, Value, 0) ->
-    put_op_2(Key, Value);
-put_op_biggest(_, _, _) ->
+put_op_1(true, Key, Value) ->
+    ets:insert(store, {Key, Value});
+put_op_1(false, _, _) ->
     {error, not_me}.
 
-put_op_2(Key, Value) ->
-    ets:insert(store, {Key, Value}),
-    ok.
+
+%%--------------------------------------------------------------------
+%% put operation
+%%--------------------------------------------------------------------
+call_op(Key, Module, Func, Args, MyHash, SuccList) ->
+    call_op_1(confirm(Key, MyHash, SuccList), [Module, Func, Args]).
+
+call_op_1(true, Args) ->
+    apply(erlang, apply, Args);
+call_op_1(false, _) ->
+    {error, not_me}.
 
 
 %%====================================================================
@@ -357,3 +364,36 @@ select_succlist(Hash1, Hash2, SuccList) when Hash1 > Hash2 ->
     {bigger, SuccList#succlist.bigger, SuccList#succlist.bigger_len};
 select_succlist(Hash1, Hash2, SuccList) when Hash1 < Hash2 ->
     {smaller, SuccList#succlist.smaller, ?LENGTH_SUCCESSOR_LIST - SuccList#succlist.bigger_len}.
+
+
+confirm(Key, MyHash, SuccList) ->
+    Hash = crypto:sha(term_to_binary(Key)),
+    confirm_1(Hash, MyHash, SuccList).
+
+confirm_1(Hash, MyHash, _) when Hash == MyHash ->
+    true;
+confirm_1(Hash, MyHash, SuccList) when Hash > MyHash andalso (SuccList#succlist.bigger_len == 0 orelse SuccList#succlist.bigger == []) ->
+    confirm_biggest(SuccList);
+confirm_1(Hash, MyHash, SuccList) when Hash < MyHash andalso (?LENGTH_SUCCESSOR_LIST - SuccList#succlist.bigger_len == 0 orelse SuccList#succlist.smaller == []) ->
+    confirm_biggest(SuccList);
+confirm_1(Hash, MyHash, SuccList) ->
+    confirm_2(Hash, MyHash, SuccList).
+
+confirm_2(Hash, MyHash, SuccList) when Hash > MyHash ->
+    {_, NextHash} = lists:nth(1, SuccList#succlist.bigger),
+    if
+        Hash < NextHash  -> true;
+        Hash >= NextHash -> false
+    end;
+confirm_2(Hash, MyHash, SuccList) when Hash < MyHash ->
+    {_, NextHash} = lists:nth(1, SuccList#succlist.smaller),
+    if
+        Hash > NextHash  -> true;
+        Hash =< NextHash -> confirm_biggest(SuccList) 
+    end.
+
+confirm_biggest(SuccList) when SuccList#succlist.bigger == [] orelse SuccList#succlist.bigger_len == 0 ->
+    true;
+confirm_biggest(_) ->
+    false.
+

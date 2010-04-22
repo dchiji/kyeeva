@@ -261,10 +261,11 @@ init(Arg) ->
 init_tables(Ref, Return) ->
     case catch ets:lookup(node_ets_table, ?MODULE) of
         {'EXIT', {badarg, _}} ->
-            ets:new(peer_table, [ordered_set, public, named_table]),
+            PeerTable = ets:new(peer_table, [ordered_set, public, named_table]),
             ets:new(attribute_table, [set, public, named_table]),
             ets:new(incomplete_table, [set, public, named_table]),
-            ets:new(node_ets_table, [set, public, named_table]);
+            ets:new(node_ets_table, [set, public, named_table]),
+            ets:insert(node_ets_table, {?MODULE, PeerTable});
         _ -> ok
     end,
     Return ! {ok, Ref},

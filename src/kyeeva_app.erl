@@ -3,7 +3,8 @@
 
 %% API
 -export([start/0,
-        stop/0]).
+        stop/0,
+        put/3]).
 
 %% application callbacks
 -export([start/2,
@@ -22,6 +23,10 @@ start() ->
 
 stop() ->
     ok.
+
+
+put(GUID, Attribute, Key) ->
+    chord_server:call(GUID, sg_server, put, [GUID, [{Attribute, Key}]]).
 
 
 %%====================================================================
