@@ -8,7 +8,7 @@
 
 
 ERL = erl
-MODS = src/sg src/sg_join src/sg_lookup src/sg_remove src/util_lock src/util src/util_mvector test/test
+MODS = src/sg_server src/sg_join src/sg_lookup src/sg_remove src/util_lock src/util src/util_mvector test/test
 #MODS = src/util_lock src/util src/util_mvector src/sg_join test/mock_sg_join
 all: compile
 compile: ${MODS:%=%.beam}
