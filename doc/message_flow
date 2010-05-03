@@ -1,0 +1,62 @@
+
+kyeeva_app -- ユーザに対するインターフェース
+chord_server -- データを負荷分散させるコンポーネント
+storage -- データを管理するコンポーネント
+sg_server -- データを検索するコンポーネント
+
+
+put
+    client
+    | put(list<attr, data>)
+    kyeeva_app
+    | put(GUID, list<attr, data>)
+    chord_server
+    | join(<attr, data>, GUID)
+    | ...
+    sg_server
+    | set(GUID, <attr, data>)
+    storage
+
+
+get
+    client
+    | get(<attr1, data1>=start, <attr2, data2>=end)
+    kyeeva_app
+    | get(<attr1, data1>=start, <attr2, data2>=end)
+    sg_server
+    | [get(GUID) | GUID <- list<GUID>]
+    storage
+    | reply(list<attr, data>)
+    client
+
+
+remove (... <- node0 <- node1 <- node2 <- ... というノード環において，node1 が離脱する際の処理)
+    node1:chord_server
+    | get_all()
+    node1:storage
+    | reply(list<key, value>)
+    node1:chord_server
+    | remove(successor=node0, list<key, value>)
+    node2:chord_server
+        | set_succ(node0)
+        node2:chord_server
+    | set(key, value)
+    | ...
+    node2:storage
+
+
+replicate (node1 のデータを node0 に replicate する)
+    node1:chord_server
+    | get_all()
+    node1:storage
+    | reply(list<key, value>)
+    node1:chord_server
+    | replicate(list<key, value>)
+    node0:chord_server
+    | join_replica(<attr, data>, GUID)
+    | ...
+    node0:sg_server
+    | set(GUID, <attr, data>)
+    node0:storage
+
+    問題点: node1 (レプリケーション先のノード) の決定方法 (現時点では successor がレプリケーション先となる)

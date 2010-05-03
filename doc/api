@@ -1,0 +1,22 @@
+list<a>    a のリスト
+list<a, b> a と b のペアのリスト
+
+kyeeva_app
+    void put(<attr, data>, ...)
+    list<attr, data> get(<attr1, data1>=start, <attr2, data2>=end)
+
+chord_server
+    void put(GUID, <attr, data>)
+    void remove(successor, list<key, value>)
+    void replicate(list<key, value>)
+    void set_succ(new_successor)
+
+storage
+    void set(GUID, <attr, data>)
+    <key, value> get(GUID)
+    list<key, value> get_all(void)
+
+sg_server
+    void join(<attr, data>, GUID)
+    void join_replica(<attr, data>, GUID)
+    list<guid> get(<attr1, data1>=start, <attr2, data2>=end)
