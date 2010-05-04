@@ -1,22 +1,45 @@
-list<a>    a のリスト
-list<a, b> a と b のペアのリスト
 
-kyeeva_app
-    void put(<attr, data>, ...)
-    list<attr, data> get(<attr1, data1>=start, <attr2, data2>=end)
+hash(a)    -- a のハッシュ
+list<a>    -- a のリスト
+list<a, b> -- a と b のペアのリスト
 
-chord_server
+
+kyeeva_app: ユーザに対するインターフェース
+    void put(list<attr, data>)
+        同テーブルの全要素 (attribute と data のペア) をリストで一括りにして put する．
+        つまり同時に put した要素は同じテーブルに格納されることになり，別のタイミングで put した要素は必ず別テーブルとなる．
+    list<list<attr, data>> get(<attr1, data1>=start, <attr2, data2>=end)
+        始値と終値を attribute と data のペアで指定して範囲検索を行う．
+        結果として条件に一致する全テーブル (全要素のリスト) がリストでまとめられて返される．
+
+chord_server: データを負荷分散させるコンポーネント
     void put(GUID, <attr, data>)
-    void remove(successor, list<key, value>)
+        hash(GUID) を担当するノードを決定し，そのノード上の sg_server に put 要求を送る．
+    void remove(successor', list<key, value>)
+        離脱したいノードはその predecessor にこの要求を送る．
+        受信したノードは自身の successor を successor' に変更し，storage に各 key, value を put する．
     void replicate(list<key, value>)
+        storage に各 key, value を put する．
     void set_succ(new_successor)
+        successor を new_successor に変更する．
 
-storage
-    void set(GUID, <attr, data>)
-    <key, value> get(GUID)
-    list<key, value> get_all(void)
-
-sg_server
+sg_server: データを検索するコンポーネント
     void join(<attr, data>, GUID)
+        attribute と data のペアをキー，GUID を値とするピアを Skip Graph オーバーレイ上に加入させる．
     void join_replica(<attr, data>, GUID)
+        任意のデータの複製を Skip Graph オーバーレイ上に加入させる．
+        新規データの join との違いは直列ではなく並列に join する点．
+        {peer1(key1)} - {peer2(key2), peer3(key2)} - {peer4(key4)}
     list<guid> get(<attr1, data1>=start, <attr2, data2>=end)
+        始値と終値を attribute と data のペアで指定して範囲検索を行う．
+        結果として条件に一致する全テーブル (全要素のリスト) がリストでまとめられて返される．
+
+storage: データを管理するコンポーネント
+    void put(GUID, <attr, data>)
+        GUID をキー，attribute と data のペアを値として保存する．
+    <attr, data> get(GUID)
+        GUID をキーとする値 (attribute と data のペア) を取得する．
+    list<GUID, <attr, data>> get_all(void)
+        storage に保存されているすべてのデータを取得する．
+        結果はリストでまとめられて返される．
+
