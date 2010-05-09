@@ -187,8 +187,8 @@ code_change(_, State, _) ->
 %% join operation
 %%--------------------------------------------------------------------
 join_op(NewHash, From, MyHash) ->
-    MySuccList = gen_server:call(chord_man, succlist),
-    case gen_server:call(chord_man, {find, 1, NewHash}) of
+    MySuccList = chord_man:succlist(),
+    case chord_man:find(1, NewHash) of
         self -> join_op_1(MyHash, NewHash, From, MySuccList, MySuccList);
         {OtherServer, _} ->
             gen_server:cast(OtherServer, {join_op_cast, NewHash, From}),
@@ -219,7 +219,7 @@ join_op_2(MyHash, NewHash, {NewServer, _Ref}, MySuccList) when MyHash > NewHash 
 %% spawned funtion
 lookup_op(Key, From) ->
     Hash = crypto:sha(term_to_binary(Key)),
-    case gen_server:call(chord_man, {find, 1, Hash}) of
+    case chord_man:find(1, Hash) of
         self   -> lookup_op_1(Key, From);
         {S, _} -> gen_server:cast(S, {lookup_op_cast, Key, From})
     end.
@@ -236,7 +236,7 @@ lookup_op_1(Key, From) ->
 %%--------------------------------------------------------------------
 put_op(Key, Value) ->
     Hash = crypto:sha(term_to_binary(Key)),
-    case gen_server:call(chord_man, {find, 1, Hash}) of
+    case chord_man:find(1, Hash) of
         self -> ets:insert(store, {Key, Value});
         _    -> {error, not_me}
     end.
@@ -247,7 +247,7 @@ put_op(Key, Value) ->
 %%--------------------------------------------------------------------
 call_op(Key, Module, Func, Args) ->
     Hash = crypto:sha(term_to_binary(Key)),
-    case gen_server:call(chord_man, {find, 1, Hash}) of
+    case chord_man:find(1, Hash) of
         self -> apply(Module, Func, Args);
         _    -> {error, not_me}
     end.
