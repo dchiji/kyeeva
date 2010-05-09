@@ -1,4 +1,4 @@
--module(test).
+-module(sg_test).
 -compile(export_all).
 
 test() ->
