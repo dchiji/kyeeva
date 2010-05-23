@@ -33,16 +33,14 @@ start() ->
     start(nil).
 
 start(InitNode) ->
-    spawn(fun() ->
-                ets:new(store, [named_table, set, public]),
-                timer:sleep(infinity)
-        end),
     gen_server:start({local, ?MODULE}, ?MODULE, [InitNode], []).
 
 
 get(Key) ->
-    {_, Pair={Key, _}} = gen_server:call(?MODULE, {lookup_op, Key}),
-    [Pair].
+    case gen_server:call(?MODULE, {lookup_op, Key}) of
+        {_, Pair={Key, _, _}} -> [Pair];
+        {_, {error, {not_found, _}}} -> []
+    end.
 
 
 put(Key, Value) ->
@@ -83,8 +81,9 @@ server() ->
 %%--------------------------------------------------------------------
 init([nil]) ->
     MyHash = myhash(),
+    Store = store_server:start(),
     Manager = chord_man:start(MyHash, #succlist{bigger=[], smaller=[]}),
-    {ok, #state{myhash=MyHash, manager=Manager}};
+    {ok, #state{myhash=MyHash, manager=Manager, store=Store}};
 init([InitNode]) ->
     case net_adm:ping(InitNode) of
         pong -> {ok, init_successor_list(InitNode)};
@@ -96,8 +95,12 @@ init_successor_list(InitNode) ->
         {badrpc, Reason} -> {stop, Reason};
         {ok, InitServer} ->
             MyHash = myhash(),
-            Manager = chord_man:start(MyHash, gen_server:call(InitServer, {join_op, MyHash})),
-            #state{myhash=MyHash, manager=Manager}
+            Store = store_server:start(),
+            {InitSuccList, DataList} = gen_server:call(InitServer, {join_op, MyHash}),
+            io:format("init succlist: ~p~n", [InitSuccList]),
+            Manager = chord_man:start(MyHash, InitSuccList),
+            [store_server:put(Key, Value, Hash) || {Key, Value, Hash} <- DataList],
+            #state{myhash=MyHash, manager=Manager, store=Store}
     end.
 
 myhash() ->
@@ -187,30 +190,44 @@ code_change(_, State, _) ->
 %% join operation
 %%--------------------------------------------------------------------
 join_op(NewHash, From, MyHash) ->
-    MySuccList = chord_man:succlist(),
+    MySuccList = chord_man:successor(1),
     case chord_man:find(1, NewHash) of
-        self -> join_op_1(MyHash, NewHash, From, MySuccList, MySuccList);
+        self -> join_op_1(MyHash, NewHash, From, MySuccList);
         {OtherServer, _} ->
             gen_server:cast(OtherServer, {join_op_cast, NewHash, From}),
             MySuccList
     end.
 
-join_op_1(MyHash, NewHash, From, MySuccList, ResultSuccList) ->
-    gen_server:reply(From, ResultSuccList),
+join_op_1(MyHash, NewHash, From, MySuccList) ->
+    ResultSuccList = case MySuccList of
+        {_, [], []} when MyHash < NewHash -> MySuccList#succlist{smaller=[{self(), MyHash}]};
+        {_, [], []} when MyHash > NewHash -> MySuccList#succlist{bigger=[{self(), MyHash}]};
+        _ when MyHash > NewHash ->
+            {Smaller1, Bigger1} = lists:partition(fun(X) -> X < NewHash end, MySuccList#succlist.smaller),
+            Smaller = cut(?LENGTH_SUCCESSOR_LIST, Smaller1),
+            Bigger = cut(?LENGTH_SUCCESSOR_LIST - length(Smaller), Bigger1 ++ MySuccList#succlist.bigger),
+            case Bigger of
+                [] -> #succlist{smaller=cut(length(Smaller) - 1, Smaller), bigger=[{self(), MyHash}]};
+                _ -> #succlist{smaller=Smaller, bigger=Bigger}
+            end;
+        _ -> MySuccList
+    end,
+    gen_server:reply(From, {ResultSuccList, R=store_server:range(NewHash, MyHash)}),
+    io:format("split: ~p~n", [R]),
     join_op_2(MyHash, NewHash, From, MySuccList).
 
 join_op_2(MyHash, NewHash, {NewServer, _Ref}, MySuccList) when MyHash < NewHash ->
     {Bigger, _} = if
-        length(MySuccList#succlist.smaller) + length(MySuccList#succlist.bigger) < ?LENGTH_SUCCESSOR_LIST -> {MySuccList#succlist.bigger, nil};
+        length(MySuccList#succlist.smaller) + length(MySuccList#succlist.bigger) < ?LENGTH_SUCCESSOR_LIST -> {MySuccList#succlist.bigger, []};
         true -> lists:split(?LENGTH_SUCCESSOR_LIST - length(MySuccList#succlist.smaller) - 1, MySuccList#succlist.bigger)
     end,
-    MySuccList#succlist{bigger = [{NewServer, NewHash} | Bigger]};
+    chord_man:set(1, MySuccList#succlist{bigger = [{NewServer, NewHash} | Bigger]});
 join_op_2(MyHash, NewHash, {NewServer, _Ref}, MySuccList) when MyHash > NewHash ->
     {Smaller, _} = if
-        length(MySuccList#succlist.smaller) + length(MySuccList#succlist.bigger) < ?LENGTH_SUCCESSOR_LIST -> {MySuccList#succlist.bigger, nil};
+        length(MySuccList#succlist.smaller) + length(MySuccList#succlist.bigger) < ?LENGTH_SUCCESSOR_LIST -> {MySuccList#succlist.bigger, []};
         true -> lists:split(?LENGTH_SUCCESSOR_LIST - length(MySuccList#succlist.bigger) - 1, MySuccList#succlist.smaller)
     end,
-    MySuccList#succlist{smaller = [{NewServer, NewHash} | Smaller]}.
+    chord_man:set(1, MySuccList#succlist{smaller = [{NewServer, NewHash} | Smaller]}).
 
 
 %%--------------------------------------------------------------------
@@ -219,15 +236,16 @@ join_op_2(MyHash, NewHash, {NewServer, _Ref}, MySuccList) when MyHash > NewHash 
 %% spawned funtion
 lookup_op(Key, From) ->
     Hash = crypto:sha(term_to_binary(Key)),
+    io:format("succlist: ~p~nhash:     ~p~n", [chord_man:successor(1), Hash]),
     case chord_man:find(1, Hash) of
         self   -> lookup_op_1(Key, From);
-        {S, _} -> gen_server:cast(S, {lookup_op_cast, Key, From})
+        {S, _} -> io:format("cast~n"), gen_server:cast(S, {lookup_op_cast, Key, From})
     end.
 
 lookup_op_1(Key, From) ->
-    case ets:lookup(store, Key) of
+    case store_server:get(Key) of
         [] -> gen_server:reply(From, {whereis(?MODULE), {error, {not_found, Key}}});    %% TODO: add exception handling for not_found pattern
-        [{Key, Value}] -> gen_server:reply(From, {whereis(?MODULE), {Key, Value}})
+        [{Key, Value, Hash}] -> gen_server:reply(From, {whereis(?MODULE), {Key, Value, Hash}})
     end.
 
 
@@ -237,7 +255,7 @@ lookup_op_1(Key, From) ->
 put_op(Key, Value) ->
     Hash = crypto:sha(term_to_binary(Key)),
     case chord_man:find(1, Hash) of
-        self -> ets:insert(store, {Key, Value});
+        self -> store_server:put(Key, Value);
         _    -> {error, not_me}
     end.
 
@@ -251,3 +269,13 @@ call_op(Key, Module, Func, Args) ->
         self -> apply(Module, Func, Args);
         _    -> {error, not_me}
     end.
+
+
+%%====================================================================
+%% utilities
+%%====================================================================
+cut(Len, List) when length(List) =< Len->
+    List;
+cut(Len, List) ->
+    {List1, _} = lists:split(Len, List),
+    List1.

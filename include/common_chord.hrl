@@ -1,6 +1,7 @@
 -record(state, {
     myhash :: binary(),
-    manager :: pid() 
+    manager :: pid(),
+    store :: pid()
 }).
 
 -record(state_man, {

@@ -10,7 +10,8 @@
         successor/0,
         successor/1,
         find/2,
-        set/1]).
+        set/1,
+        set/2]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -43,7 +44,10 @@ find(Level, Hash) ->
 
 
 set(NewSuccList) ->
-    gen_server:call(?MODULE, {set, NewSuccList}).
+    set(1, NewSuccList).
+
+set(Level, NewSuccList) ->
+    gen_server:call(?MODULE, {set, Level, NewSuccList}).
 
 
 %%====================================================================
@@ -69,10 +73,10 @@ init([Hash, SuccList, N]) ->
 %%                                                {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
-handle_call(succlist, _, State) ->
+handle_call(successor, _, State) ->
     {reply, lists:nth(1, State#state_man.succlists), State};
 
-handle_call({succlist, Level}, _, State) ->
+handle_call({successor, Level}, _, State) ->
     {reply, lists:nth(Level, State#state_man.succlists), State};
 
 handle_call({find, Level, Hash}, _, State) ->
@@ -132,28 +136,39 @@ code_change(_, State, _) ->
 %% utilities
 %%====================================================================
 find(Hash, MyHash, SuccList) ->
-    case next(MyHash, Hash, SuccList) of
+    %case next(MyHash, Hash, SuccList) of
+    %    {error, Reason} -> {error, Reason};
+    %    biggest         -> find_biggest(SuccList#succlist.bigger);
+    %    self            -> self;
+    %    Peer            -> Peer
+    %end.
+    {Bigger, Smaller} = case SuccList#succlist.bigger of
+        []      -> {[], case SuccList#succlist.smaller of [] -> []; X -> [lists:nth(1, X)] end};
+        [X | _] -> {[X], []}
+    end,
+    io:format("smaller=~p, bigger=~p, MyHash =< NewHash=~p~n", [Smaller, Bigger, MyHash =< Hash]),
+    case next(MyHash, Hash, #succlist{smaller=Smaller, bigger=Bigger}) of
         {error, Reason} -> {error, Reason};
-        biggest         -> find_biggest(SuccList);
+        biggest         -> find_biggest(Bigger);
         self            -> self;
         Peer            -> Peer
     end.
 
 
-%% the first argument must be 'smaller'
-find_biggest(SuccList) ->
-    case SuccList#succlist.bigger of
-        []     -> self;
-        Bigger -> lists:nth(length(Bigger), Bigger)
-    end.
+find_biggest([]) ->
+    self;
+find_biggest(Bigger) ->
+    lists:nth(length(Bigger), Bigger).
 
 
 %% bigger
 next(MyHash, NewHash, {succlist, [{_, NewHash}=Peer | _], _}) when MyHash =< NewHash ->
     Peer;
-next(MyHash, NewHash, {succlist, [{_, Hash} | _], _}) when (MyHash =< NewHash) and (NewHash > Hash) ->
+next(MyHash, NewHash, {succlist, [{_, Hash} | _], _}) when (MyHash =< NewHash) and (NewHash < Hash) ->
+    io:format("test1~n"),
     self;
 next(MyHash, NewHash, {succlist, [], _}) when MyHash =< NewHash ->
+    io:format("test2~n"),
     self;
 next(MyHash, NewHash, {succlist, SuccList, _}) when MyHash =< NewHash ->
     next_1(MyHash, NewHash, SuccList);
@@ -173,13 +188,13 @@ next_1(_, _, [Peer]) ->
     Peer;
 
 %% bigger
-next_1(MyHash, NewHash, [{Server, Hash1}, {_, Hash2} | _]) when (MyHash =< NewHash) and (NewHash < Hash2) ->
-    {Server, Hash1};
-next_1(MyHash, NewHash, [_, {Server, Hash} | Tail]) when (MyHash =< NewHash) and (NewHash > Hash) ->
-    next_1(MyHash, NewHash, [{Server, Hash} | Tail]);
+next_1(MyHash, NewHash, [{_, Hash1}=Peer, {_, Hash2} | _]) when (MyHash =< NewHash) and (NewHash < Hash2) ->
+    Peer;
+next_1(MyHash, NewHash, [_, {_, Hash}=Peer | Tail]) when (MyHash =< NewHash) and (NewHash > Hash) ->
+    next_1(MyHash, NewHash, [Peer | Tail]);
 
 %% smaller
-next_1(MyHash, NewHash, [{Server, Hash1}, {_, Hash2} | _]) when (MyHash >= NewHash) and (NewHash > Hash2) ->
+next_1(MyHash, NewHash, [{Server, Hash1}, {_, Hash2} | _]) when (MyHash >= NewHash) and (NewHash < Hash2) ->
     {Server, Hash1};
 next_1(MyHash, NewHash, [_, {Server, Hash} | Tail]) when (MyHash >= NewHash) and (NewHash < Hash) ->
     next_1(MyHash, NewHash, [{Server, Hash} | Tail]).

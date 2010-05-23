@@ -1,6 +1,25 @@
 
 -module(store_server).
--compile(export_all).
+-behaviour(gen_server).
+
+-include_lib("stdlib/include/ms_transform.hrl").
+
+%% API
+-export([start/0,
+        put/2,
+        put/3,
+        get/1,
+        range/2]).
+
+-export([range_op/3]).
+
+%% gen_server callbacks
+-export([init/1,
+        handle_call/3,
+        handle_cast/2,
+        handle_info/2,
+        terminate/2,
+        code_change/3]).
 
 
 %%====================================================================
@@ -21,6 +40,10 @@ get(Key) ->
     gen_server:call(?MODULE, {get_op, Key}).
 
 
+range(Hash1, Hash2) ->
+    gen_server:call(?MODULE, {range_op, Hash1, Hash2}).
+
+
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
@@ -33,7 +56,7 @@ get(Key) ->
 %%--------------------------------------------------------------------
 init([]) ->
     Ref = make_ref(),
-    spawn((fun(To) -> fun() -> To ! {Ref, ok, ets:new(store_table, [named_table, public, ordered_set])} end end)(self())),
+    spawn((fun(To) -> fun() -> To ! {Ref, ok, ets:new(store_table, [named_table, public, ordered_set])}, timer:sleep(infinity) end end)(self())),
     receive
         {Ref, ok, Table} -> {ok, [Table]}
     end.
@@ -49,9 +72,9 @@ init([]) ->
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
 handle_call({put_op, Key, Value, Hash}, _, State) ->
-    {reply, ets:insert(storage_table, {Key, Value, Hash}), State};
+    {reply, ets:insert(store_table, {Key, Value, Hash}), State};
 handle_call({get_op, Key}, _, State) ->
-    {reply, ets:lookup(storage_table, Key), State};
+    {reply, ets:lookup(store_table, Key), State};
 handle_call({range_op, Hash1, Hash2}, _, [Table]=State) ->
     {reply, range_op(Table, Hash1, Hash2), State};
 handle_call(_, _, State) ->
@@ -103,5 +126,7 @@ code_change(_, State, _) ->
 %%--------------------------------------------------------------------
 %% split operation
 %%--------------------------------------------------------------------
-range_op(Table, Hash1, Hash2) ->
-    ets:select(Table, ets:fun2ms(fun({_, _, Hash}=Element) when Hash1 < Hash, Hash < Hash2 -> Element end)).
+range_op(Table, Hash1, Hash2) when Hash1 < Hash2 ->
+    ets:select(Table, ets:fun2ms(fun({_, _, Hash}=Element) when Hash1 =< Hash, Hash < Hash2 -> Element end));
+range_op(Table, Hash1, Hash2) when Hash1 > Hash2 ->
+    ets:select(Table, ets:fun2ms(fun({_, _, Hash}=Element) when (Hash1 =< Hash) or (Hash < Hash2) -> Element end)).
