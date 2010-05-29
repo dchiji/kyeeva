@@ -68,14 +68,14 @@ process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
                 [{BestNode, Tab}] ->
                     [{BestNode, Tab} | _] = ets:lookup(lock_ets_table, BestNode),
                     case ets:lookup(Tab, Key0) of
-                        [] -> From ! {Ref, {'get-end'}};
+                        [] -> From ! {Ref, {'lookup-end'}};
                         [{Key0, {ParentKey, _, _}} | _] ->
                             ValueList = case TypeList of
                                 [] -> get_values(ParentKey, [value]);
                                 _  -> get_values(ParentKey, TypeList)
                             end,
-                            From ! {Ref, {'get-reply', {ParentKey, ValueList}}},
-                            From ! {Ref, {'get-end'}}
+                            From ! {Ref, {'lookup-reply', {ParentKey, ValueList}}},
+                            From ! {Ref, {'lookup-end'}}
                     end;
                 _ -> gen_server:call(BestNode, {Key0, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
             end;
@@ -92,12 +92,12 @@ process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
             [{_, Peer}] = ets:lookup(peer_table, Key),
             {NextNode, NextKey} = lists:nth(1, Peer#pstate.bigger),
             case {NextNode, NextKey} of
-                {nil, nil} -> From ! {Ref, {'get-end'}};
+                {nil, nil} -> From ! {Ref, {'lookup-end'}};
                 _ -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}})
             end;
         Key1 < SelfKey ->
             io:format("2~n"),
-            From ! {Ref, {'get-end'}};
+            From ! {Ref, {'lookup-end'}};
         true ->
             io:format("3~n"),
             [{_, Peer}] = ets:lookup(peer_table, Key),
@@ -107,12 +107,12 @@ process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
                 [] -> get_values(ParentKey, [value]);
                 _  -> get_values(ParentKey, TypeList)
             end,
-            From ! {Ref, {'get-reply', {ParentKey, ValueList}}},
+            From ! {Ref, {'lookup-reply', {ParentKey, ValueList}}},
             case {NextNode, NextKey} of
-                {nil, nil} -> From ! {Ref, {'get-end'}};
+                {nil, nil} -> From ! {Ref, {'lookup-end'}};
                 _ ->
                     if
-                        NextKey < Key0 orelse Key1 < NextKey -> From ! {Ref, {'get-end'}};
+                        NextKey < Key0 orelse Key1 < NextKey -> From ! {Ref, {'lookup-end'}};
                         true -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}})
                     end
             end
@@ -133,8 +133,8 @@ call(Module, Key0, Key1, TypeList) ->
 
 call(Ref, List) ->
     receive
-        {Ref, {'get-reply', ValueList}} -> call(Ref, [ValueList | List]);
-        {Ref, {'get-end'}} -> List
+        {Ref, {'lookup-reply', ValueList}} -> call(Ref, [ValueList | List]);
+        {Ref, {'lookup-end'}} -> List
     after 1500 -> List
     end.
 
