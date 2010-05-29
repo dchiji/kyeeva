@@ -6,7 +6,7 @@
     }).
 
 -ifdef(debug).
-    -define(LEVEL_MAX, 4).
+    -define(LEVEL_MAX, 8).
 -else.
     %-define(LEVEL_MAX, 8).
     -define(LEVEL_MAX, 16).
@@ -15,8 +15,4 @@
     %-define(LEVEL_MAX, 128).
 -endif.
 
--ifdef(debug).
-    -define(SERVER_MODULE, mock_sg_join).
--else.
-    -define(SERVER_MODULE, sg_server).
--endif.
+-define(SERVER_MODULE, sg_server).

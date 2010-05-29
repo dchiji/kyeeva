@@ -80,6 +80,7 @@ server() ->
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
 init([nil]) ->
+    io:format("chord_server: booting~n"),
     MyHash = myhash(),
     Store = store_server:start(),
     Manager = chord_man:start(MyHash, #succlist{bigger=[], smaller=[]}),
@@ -104,8 +105,6 @@ init_successor_list(InitNode) ->
     end.
 
 myhash() ->
-    crypto:start(),
-    crypto:sha_init(),
     crypto:sha(term_to_binary(node())).
 
 
