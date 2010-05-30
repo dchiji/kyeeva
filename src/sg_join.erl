@@ -51,12 +51,10 @@ process_0(MyKey, From, Server, NewKey, MVector, Level) ->
             pass;
         _ ->
             process_0_1(MyKey, From, Server, NewKey, MVector, Level)
-    end,
-    io:format("process-0 ok~n").
+    end.
 
 process_0_1(MyKey, From, Server, NewKey, MVector, Level) when MyKey == NewKey ->
     [{MyKey, MyPstate}] = ets:lookup(peer_table, MyKey),
-    io:format("~n~npstate.smaller=~p~n~n~n", [MyPstate#pstate.smaller]),
     case lists:nth(Level - 1, MyPstate#pstate.smaller) of
         {nil, nil}          -> gen_server:reply(From, {error, mismatch});
         {BestServer, BestKey} -> gen_server:call(BestServer, {BestKey, {'join-process-0', {From, Server, NewKey, MVector}}, Level})
@@ -69,8 +67,8 @@ process_0_1(MyKey, From, Server, NewKey, MVector, Level) ->
     end,
     process_0_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B).
 
-process_0_2(MyKey, From, Server, NewKey, MVector, 1=Level, Neighbor, S_or_B) ->
-    case util:select_best(Neighbor, NewKey, S_or_B) of
+process_0_2(MyKey, From, Server, {KeyN, _}=NewKey, MVector, 1=Level, Neighbor, S_or_B) ->
+    case util:select_best(Neighbor, KeyN, S_or_B) of
         {nil, nil} ->
             %% go to next step (join_process_1)
             %% because I lock other process of MyKey, I use not gen_server:handle_call but function-call
@@ -100,11 +98,11 @@ process_0_2(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B) ->
 process_0_3(MyKey, From, Server, NewKey, MVector, Level, _, _, {_, NextKey}) when NewKey == NextKey ->
     process_1(MyKey, From, Server, NewKey, MVector, Level);
 % Level(N - 1)以上のNeighborを対象にすることで，無駄なメッセージング処理を無くす
-process_0_3(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B, _) ->
+process_0_3(MyKey, From, Server, {KeyN, _}=NewKey, MVector, Level, Neighbor, S_or_B, _) ->
     BestPeer = case ets:lookup(incomplete_table, MyKey) of
-        [{MyKey, {join, MaxLevel}}] when MaxLevel + 1 == Level -> util:select_best(lists:nthtail(MaxLevel, Neighbor), NewKey, S_or_B);
+        [{MyKey, {join, MaxLevel}}] when MaxLevel + 1 == Level -> util:select_best(lists:nthtail(MaxLevel, Neighbor), KeyN, S_or_B);
         [{MyKey, {join, MaxLevel}}] when MaxLevel < Level      -> error;    %% it never match this
-        _                                                      -> util:select_best(lists:nthtail(Level - 1, Neighbor), NewKey, S_or_B)
+        _                                                      -> util:select_best(lists:nthtail(Level - 1, Neighbor), KeyN, S_or_B)
     end,
     case BestPeer of
         {nil, nil}          -> process_1(MyKey, From, Server, NewKey, MVector, Level);
@@ -118,7 +116,6 @@ process_0_3(MyKey, From, Server, NewKey, MVector, Level, Neighbor, S_or_B, _) ->
 %%--------------------------------------------------------------------
 %% process_0/3関数から呼び出される．
 %% MVector[Level]が一致するピアを外側に向かって探索．
-%% 成功したら自身のNeighborをutil_lock:set_neighborし，Anotherにもutil_lock:set_neighborメッセージを送信する．
 process_1(MyKey, From, Server, NewKey, MVector, Level) ->
     [{MyKey, MyPstate}] = ets:lookup(peer_table, MyKey),
     MyBit               = util_mvector:nth(Level, MyPstate#pstate.mvector),

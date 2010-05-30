@@ -55,21 +55,19 @@ process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
         Key0 < SelfKey -> {Smaller, smaller};
         SelfKey < Key0 -> {Bigger, bigger}
     end,
-    io:format("Key0 = ~p, SelfKey = ~p, S_or_B = ~p~n", [Key0, SelfKey, S_or_B]),
-    io:format("Neighbor = ~p~n", [Neighbor]),
     case util:select_best(Neighbor, Key0, S_or_B) of
         % 最適なピアが見つかったので、次のフェーズ(lookup-process-1)へ移行
-        {nil, nil} -> io:format("nil~n"),process_1(Key, Key0, Key1, TypeList, {Ref, From});
-        {self, self} -> io:format("self~n"),process_1(Key, Key0, Key1, TypeList, {Ref, From});
+        {nil, nil} -> process_1(Key, Key0, Key1, TypeList, {Ref, From});
+        {self, self} -> process_1(Key, Key0, Key1, TypeList, {Ref, From});
 
         % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
-        {BestNode, Key0} when Key0 == Key1 ->
+        {BestNode, BestKey} when Key0 == Key1 ->
             case ets:lookup(lock_ets_table, BestNode) of
                 [{BestNode, Tab}] ->
                     [{BestNode, Tab} | _] = ets:lookup(lock_ets_table, BestNode),
-                    case ets:lookup(Tab, Key0) of
+                    case ets:lookup(Tab, BestKey) of
                         [] -> From ! {Ref, {'lookup-end'}};
-                        [{Key0, {ParentKey, _, _}} | _] ->
+                        [{_, {ParentKey, _, _}} | _] ->
                             ValueList = case TypeList of
                                 [] -> get_values(ParentKey, [value]);
                                 _  -> get_values(ParentKey, TypeList)
@@ -77,7 +75,7 @@ process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
                             From ! {Ref, {'lookup-reply', {ParentKey, ValueList}}},
                             From ! {Ref, {'lookup-end'}}
                     end;
-                _ -> gen_server:call(BestNode, {Key0, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
+                _ -> gen_server:call(BestNode, {BestKey, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
             end;
         % 最適なピアの探索を続ける(lookup-process-0)
         {BestNode, BestKey} ->
@@ -88,7 +86,6 @@ process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
 process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
     if
         SelfKey < Key0 ->
-            io:format("1~n"),
             [{_, Peer}] = ets:lookup(peer_table, Key),
             {NextNode, NextKey} = lists:nth(1, Peer#pstate.bigger),
             case {NextNode, NextKey} of
@@ -96,10 +93,8 @@ process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
                 _ -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}})
             end;
         Key1 < SelfKey ->
-            io:format("2~n"),
             From ! {Ref, {'lookup-end'}};
         true ->
-            io:format("3~n"),
             [{_, Peer}] = ets:lookup(peer_table, Key),
             ParentKey = Peer#pstate.parent_key,
             {NextNode, NextKey} = lists:nth(1, Peer#pstate.bigger),
@@ -110,9 +105,9 @@ process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
             From ! {Ref, {'lookup-reply', {ParentKey, ValueList}}},
             case {NextNode, NextKey} of
                 {nil, nil} -> From ! {Ref, {'lookup-end'}};
-                _ ->
+                {NextNode, {KeyN, _}} ->
                     if
-                        NextKey < Key0 orelse Key1 < NextKey -> From ! {Ref, {'lookup-end'}};
+                        KeyN < Key0 orelse Key1 < KeyN -> From ! {Ref, {'lookup-end'}};
                         true -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}})
                     end
             end
