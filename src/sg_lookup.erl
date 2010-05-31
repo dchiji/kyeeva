@@ -62,9 +62,8 @@ process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
 
         % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
         {BestNode, BestKey} when Key0 == Key1 ->
-            case ets:lookup(lock_ets_table, BestNode) of
+            case ets:lookup(node_ets_table, BestNode) of
                 [{BestNode, Tab}] ->
-                    [{BestNode, Tab} | _] = ets:lookup(lock_ets_table, BestNode),
                     case ets:lookup(Tab, BestKey) of
                         [] -> From ! {Ref, {'lookup-end'}};
                         [{_, {ParentKey, _, _}} | _] ->

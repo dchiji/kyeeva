@@ -105,6 +105,8 @@ init_successor_list(InitNode) ->
     end.
 
 myhash() ->
+    crypto:start(),
+    crypto:sha_init(),
     crypto:sha(term_to_binary(node())).
 
 

@@ -6,7 +6,7 @@
 
 -record(state_man, {
     myhash :: binary(),
-    succlists :: tuple()
+    succlists :: list(tuple())
 }).
 
 -record(succlist, {

@@ -6,14 +6,15 @@
 
 
 ERL = erl
-MODS = src/kyeeva_app src/sg_server src/sg_join src/sg_lookup src/sg_remove src/util_lock src/util src/util_mvector test/sg_test src/chord_server src/chord_man src/store_server test/chord_test
+MODS = src/kyeeva_app src/kyeeva_sup src/sg_server src/sg_join src/sg_lookup src/sg_remove src/util_lock src/util src/util_mvector test/sg_test src/chord_server src/chord_man src/store_server
 #MODS = src/util_lock src/util src/util_mvector src/sg_join test/mock_sg_join
 all: compile
 compile: ${MODS:%=%.beam}
 
 
 test: compile
-	${ERL} -sname test +P 4000000 -noshell -s test test
+#	${ERL} -sname test +P 4000000 -noshell -s sg_test test
+	${ERL} -sname test +P 4000000 -s sg_test test
 ctest: compile
 	${ERL} -sname test +P 4000000 -noshell -s chord_test test
 mock: compile

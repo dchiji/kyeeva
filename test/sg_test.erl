@@ -3,19 +3,13 @@
 
 test() ->
     {ok, Server} = sg_server:start(nil),
-
     sg_server:put(0, [{type, 0}]),
     join_test(),
-
-    timer:sleep(infinity),
-
-    sg_server:remove(10),
-    io:format("get(10)=~p~n", [sg_server:get(10)]),
-
+    io:format("get: ~p~n", [sg_server:get({type, 10}, {type, 15}, [type])]),
     timer:sleep(infinity).
 
 join_test() ->
-    join_test(1, 1000).
+    join_test(1, 100).
 
 join_test(N, N) ->
     ok;

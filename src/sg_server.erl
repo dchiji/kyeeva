@@ -61,11 +61,13 @@
 %%====================================================================
 %% API
 %%====================================================================
+start(nil) ->
+    {ok, Server} = gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], [{debug, [trace]}]),
+    gen_server:call(Server, wait),
+    sg_server:put({node(), nil}, [{'__init__', node()}]),
+    {ok, Server};
 start(InitNode) ->
-    case InitNode of
-        nil -> gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], [{debug, [trace]}]);
-        _ -> gen_server:start_link({local, ?MODULE}, ?MODULE, [rpc:call(InitNode, ?MODULE, get_server, []), util_mvector:make()], [{debug, [trace, log]}])
-    end.
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [rpc:call(InitNode, ?MODULE, get_server, []), util_mvector:make()], [{debug, [trace, log]}]).
 
 
 put(ParentKey, KeyList) ->
@@ -266,7 +268,7 @@ init_tables(Ref, Return) ->
             ets:new(attribute_table, [set, public, named_table]),
             ets:new(incomplete_table, [set, public, named_table]),
             ets:new(node_ets_table, [set, public, named_table]),
-            ets:insert(node_ets_table, {?MODULE, PeerTable});
+            ets:insert(node_ets_table, {whereis(?MODULE), PeerTable});
         _ -> ok
     end,
     Return ! {ok, Ref},
@@ -282,14 +284,19 @@ init_tables(Ref, Return) ->
 %%                                                {stop, Reason, State}
 %% Description: Handling call messages
 %%--------------------------------------------------------------------
+handle_call(wait, _From, State) ->
+    {reply, ok, State};
+
 handle_call({peer, random}, _From, State) ->
-    [{SelfKey, _} | _] = ets:tab2list(peer_table),
-    io:format("~n~n~n~n~nmatch ok~n~n~n~n~n"),
-    {reply, {self(), SelfKey}, State};
+    Reply = case ets:tab2list(peer_table) of
+        [] -> {nil, nil};
+        [{SelfKey, _} | _] -> {self(), SelfKey}
+    end,
+    {reply, Reply, State};
 
 handle_call({'get-ets-table'}, _From, State) ->
     io:format("get-ets-table~n"),
-    [{?MODULE, Tab}] = ets:lookup(node_ets_table, ?MODULE),
+    [{_, Tab}] = ets:lookup(node_ets_table, whereis(?MODULE)),
     {reply, Tab, State};
 
 %% ピア(SelfKey)のValueを書き換える．join処理と組み合わせて使用．
@@ -316,17 +323,15 @@ handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, AttributeList, From}}}, 
 
 %% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す．
 handle_call({'select-first-peer', _NewKey}, From, [InitServer | Tail]) ->
-    case ets:tab2list(peer_table) of
-        [{SelfKey, _} | _]-> gen_server:reply(From, {ok, {self(), SelfKey}});
+    Reply = case ets:tab2list(peer_table) of
+        [{SelfKey, _} | _]-> {ok, {self(), SelfKey}};
         [] ->
             case InitServer of
-                nil -> gen_server:reply(From, {ok, {nil, nil}});
-                _ ->
-                    {_, Key} = gen_server:call(InitServer, {peer, random}),
-                    gen_server:reply(From, {ok, {InitServer, Key}})
+                nil -> {ok, {nil, nil}};
+                _ -> {ok, gen_server:call(InitServer, {peer, random})}
             end
     end,
-    {noreply, [InitServer | Tail]};
+    {reply, Reply, [InitServer | Tail]};
 
 %% join-process-0にFromを渡して再度呼ぶ．
 handle_call({SelfKey, {'join-process-0', {Server, NewKey, MVector}}, Level}, From, State) ->
