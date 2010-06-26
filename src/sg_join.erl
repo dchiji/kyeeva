@@ -159,19 +159,6 @@ process_1_1(MyKey, From, Server, NewKey, MVector, Level, MyPstate, [{MyKey, {joi
 % util_lock:set_neighbor処理を行い，反対側のピアにもメッセージを送信する
 process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
     Ref = make_ref(),
-    % reply先がNeighborの更新に成功するまで待機
-    WaitRemoteUpdate = fun(UpdateCallback) ->
-            receive
-                {ok, Ref} ->
-                    io:format("waiting pid=~p, ref=~p~n", [self(), Ref]),
-                    UpdateCallback(),
-                    case ets:lookup(node_ets_table, Server) of
-                        [] -> spawn(fun() -> ets:insert(node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}) end);
-                        _  -> ok
-                    end;
-                {error, Ref, Reason} -> io:format("reason: ~p~n", [Reason])
-            end
-    end,
     {Neighbor, Reply} = if
         NewKey < MyKey -> {MyPstate#pstate.smaller, {ok, {{nil, nil}, {whereis(?SERVER_MODULE), MyKey}}, {self(), Ref}}};
         MyKey < NewKey -> {MyPstate#pstate.bigger, {ok, {{whereis(?SERVER_MODULE), MyKey}, {nil, nil}}, {self(), Ref}}}
@@ -179,7 +166,7 @@ process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
     case lists:nth(Level, Neighbor) of
         {nil, nil} ->
             gen_server:reply(From, Reply),
-            WaitRemoteUpdate(fun() -> util_lock:set_neighbor(MyKey, {Server, NewKey}, Level) end);
+            wait_remote_update(Server, fun() -> util_lock:set_neighbor(MyKey, {Server, NewKey}, Level) end, Ref);
         {OtherServer, OtherKey} ->
             MyServer = whereis(?SERVER_MODULE),
             UpdateCallback = case OtherServer of
@@ -191,13 +178,26 @@ process_1_1(MyKey, From, Server, NewKey, _MVector, Level, MyPstate, _) ->
                     end;
                 _ ->
                     fun() ->
-                            gen_server:call(OtherServer, {OtherKey, {'join-process-2', {From, Server, NewKey}}, Level, {whereis(?SERVER_MODULE), MyKey}}),
-                            util_lock:set_neighbor(MyKey, {Server, NewKey}, Level)
+                            {ok, Ref1, Pid} = gen_server:call(OtherServer, {OtherKey, {'join-process-2', {Server, NewKey}}, Level, {whereis(?SERVER_MODULE), MyKey}}),
+                            util_lock:set_neighbor(MyKey, {Server, NewKey}, Level),
+                            Pid ! {ok, Ref1}
                     end
             end,
             if
                 NewKey < MyKey -> gen_server:reply(From, {ok, {{OtherServer, OtherKey}, {MyServer, MyKey}}, {self(), Ref}});
                 NewKey > MyKey -> gen_server:reply(From, {ok, {{MyServer, MyKey}, {OtherServer, OtherKey}}, {self(), Ref}})
             end,
-            WaitRemoteUpdate(UpdateCallback)
+            wait_remote_update(Server, UpdateCallback, Ref)
+    end.
+
+% reply先がNeighborの更新に成功するまで待機
+wait_remote_update(Server, UpdateCallback, Ref) ->
+    receive
+        {ok, Ref} ->
+            UpdateCallback(),
+            case ets:lookup(node_ets_table, Server) of
+                [] -> spawn(fun() -> ets:insert(node_ets_table, {Server, gen_server:call(Server, {'get-ets-table'})}) end);
+                _  -> ok
+            end;
+        {error, Ref, Reason} -> io:format("reason: ~p~n", [Reason])
     end.

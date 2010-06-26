@@ -25,28 +25,26 @@
 %%    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 -module(sg_lookup).
--export([lookup/5, process_0/5, process_1/5, call/4]).
+-export([lookup/5, process_0/6, process_1/6, call/4]).
 
 -include("../include/common_sg.hrl").
 
 
-lookup(InitialNode, Key0, Key1, TypeList, From) ->
+lookup(InitPeer, Key0, Key1, TypeList, From) ->
     PeerList = ets:tab2list(peer_table),
     case PeerList of
         [] ->
-            case InitialNode of
-                nil -> gen_server:reply(From, {ok, {nil, nil}});
-                _ ->
-                    {_, InitKey} = gen_server:call(InitialNode, {peer, random}),
-                    gen_server:call(InitialNode, {InitKey, {'lookup-process-0', {Key0, Key1, TypeList, From}}})
+            case InitPeer of
+                {nil, nil} -> gen_server:reply(From, {ok, {nil, nil}});
+                {InitServer, InitKey} -> gen_server:call(InitServer, {InitKey, {'lookup-process-0', {Key0, Key1, TypeList, From, []}}})
             end;
         _ ->
             [{SelfKey, _} | _] = PeerList,
-            gen_server:call(?SERVER_MODULE, {SelfKey, {'lookup-process-0', {Key0, Key1, TypeList, From}}})
+            gen_server:call(?SERVER_MODULE, {SelfKey, {'lookup-process-0', {Key0, Key1, TypeList, From, []}}})
     end.
 
 
-process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
+process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}, HopList) ->
     [{_, Peer}] = ets:lookup(peer_table, Key),
     Smaller = Peer#pstate.smaller,
     Bigger = Peer#pstate.bigger,
@@ -57,41 +55,47 @@ process_0({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
     end,
     case util:select_best(Neighbor, Key0, S_or_B) of
         % 最適なピアが見つかったので、次のフェーズ(lookup-process-1)へ移行
-        {nil, nil} -> process_1(Key, Key0, Key1, TypeList, {Ref, From});
-        {self, self} -> process_1(Key, Key0, Key1, TypeList, {Ref, From});
+        {nil, nil} ->
+            process_1(Key, Key0, Key1, TypeList, {Ref, From}, HopList);
+        {self, self} ->
+            process_1(Key, Key0, Key1, TypeList, {Ref, From}, HopList);
 
         % 探索するキーが一つで，かつそれを保持するピアが存在した場合，ETSテーブルに直接アクセスする
-        {BestNode, BestKey} when Key0 == Key1 ->
-            case ets:lookup(node_ets_table, BestNode) of
-                [{BestNode, Tab}] ->
-                    case ets:lookup(Tab, BestKey) of
-                        [] -> From ! {Ref, {'lookup-end'}};
-                        [{_, {ParentKey, _, _}} | _] ->
-                            ValueList = case TypeList of
-                                [] -> get_values(ParentKey, [value]);
-                                _  -> get_values(ParentKey, TypeList)
-                            end,
-                            From ! {Ref, {'lookup-reply', {ParentKey, ValueList}}},
-                            From ! {Ref, {'lookup-end'}}
-                    end;
-                _ -> gen_server:call(BestNode, {BestKey, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
-            end;
+        %{BestNode, BestKey} when Key0 == Key1 ->
+        %    io:format("test~n"),
+        %    case ets:lookup(node_ets_table, BestNode) of
+        %        [{BestNode, Tab}] ->
+        %            case ets:lookup(Tab, BestKey) of
+        %                [] -> From ! {Ref, {'lookup-end'}};
+        %                [{_, {ParentKey, _, _}} | _] ->
+        %                    ValueList = case TypeList of
+        %                        [] -> get_values(ParentKey, [value]);
+        %                        _  -> get_values(ParentKey, TypeList)
+        %                    end,
+        %                    From ! {Ref, {'lookup-reply', {ParentKey, ValueList}}},
+        %                    From ! {Ref, {'lookup-end'}}
+        %            end;
+        %        _ -> gen_server:call(BestNode, {BestKey, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
+        %    end;
         % 最適なピアの探索を続ける(lookup-process-0)
         {BestNode, BestKey} ->
-            gen_server:call(BestNode, {BestKey, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}}}})
+            gen_server:call(BestNode, {BestKey, {'lookup-process-0', {Key0, Key1, TypeList, {Ref, From}, [Key | HopList]}}})
     end.
 
 
-process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
+process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}, HopList) ->
     if
         SelfKey < Key0 ->
             [{_, Peer}] = ets:lookup(peer_table, Key),
             {NextNode, NextKey} = lists:nth(1, Peer#pstate.bigger),
             case {NextNode, NextKey} of
-                {nil, nil} -> From ! {Ref, {'lookup-end'}};
-                _ -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}})
+                {nil, nil} ->
+                    From ! {Ref, {'lookup-reply', {hops, HopList}}},
+                    From ! {Ref, {'lookup-end'}};
+                _ -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}, [Key | HopList]}}})
             end;
         Key1 < SelfKey ->
+            From ! {Ref, {'lookup-reply', {hops, HopList}}},
             From ! {Ref, {'lookup-end'}};
         true ->
             [{_, Peer}] = ets:lookup(peer_table, Key),
@@ -103,11 +107,15 @@ process_1({SelfKey, _}=Key, Key0, Key1, TypeList, {Ref, From}) ->
             end,
             From ! {Ref, {'lookup-reply', {ParentKey, ValueList}}},
             case {NextNode, NextKey} of
-                {nil, nil} -> From ! {Ref, {'lookup-end'}};
+                {nil, nil} ->
+                    From ! {Ref, {'lookup-reply', {hops, HopList}}},
+                    From ! {Ref, {'lookup-end'}};
                 {NextNode, {KeyN, _}} ->
                     if
-                        KeyN < Key0 orelse Key1 < KeyN -> From ! {Ref, {'lookup-end'}};
-                        true -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}}}})
+                        KeyN < Key0 orelse Key1 < KeyN ->
+                            From ! {Ref, {'lookup-reply', {hops, HopList}}},
+                            From ! {Ref, {'lookup-end'}};
+                        true -> gen_server:call(NextNode, {NextKey, {'lookup-process-1', {Key0, Key1, TypeList, {Ref, From}, [Key | HopList]}}})
                     end
             end
     end.

@@ -146,7 +146,6 @@ find(Hash, MyHash, SuccList) ->
         []      -> {[], case SuccList#succlist.smaller of [] -> []; X -> [lists:nth(1, X)] end};
         [X | _] -> {[X], []}
     end,
-    io:format("smaller=~p, bigger=~p, MyHash =< NewHash=~p~n", [Smaller, Bigger, MyHash =< Hash]),
     case next(MyHash, Hash, #succlist{smaller=Smaller, bigger=Bigger}) of
         {error, Reason} -> {error, Reason};
         biggest         -> find_biggest(Bigger);
@@ -165,10 +164,8 @@ find_biggest(Bigger) ->
 next(MyHash, NewHash, {succlist, [{_, NewHash}=Peer | _], _}) when MyHash =< NewHash ->
     Peer;
 next(MyHash, NewHash, {succlist, [{_, Hash} | _], _}) when (MyHash =< NewHash) and (NewHash < Hash) ->
-    io:format("test1~n"),
     self;
 next(MyHash, NewHash, {succlist, [], _}) when MyHash =< NewHash ->
-    io:format("test2~n"),
     self;
 next(MyHash, NewHash, {succlist, SuccList, _}) when MyHash =< NewHash ->
     next_1(MyHash, NewHash, SuccList);

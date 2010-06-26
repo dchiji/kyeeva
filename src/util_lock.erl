@@ -53,7 +53,7 @@
 %%====================================================================
 
 wakeup_init() ->
-    ets:new(sleeping_process_name_table, [bag, public, named_table]).
+    spawn(fun() -> ets:new(sleeping_process_name_table, [bag, public, named_table]), timer:sleep(infinity) end).
 
 
 wakeup_register(Key, Pid) ->

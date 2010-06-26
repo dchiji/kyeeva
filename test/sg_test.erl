@@ -14,7 +14,7 @@ join_test() ->
 join_test(N, N) ->
     ok;
 join_test(N, M) ->
-    sg_server:put(N, [{type, N}]),
+    sg_server:put(N, [{type, N}, {type2,N}]),
     timer:sleep(10),
     join_test(N + 1, M).
 

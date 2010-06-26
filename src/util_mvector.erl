@@ -45,12 +45,10 @@ is_equal(MVector1, MVector2, Level) ->
 
 
 io_binary(MV) ->
-    io_binary_1(MV, ?LEVEL_MAX),
-    io:format("~n").
+    io_binary_1(MV, ?LEVEL_MAX).
 
 io_binary_1(_, 0) -> ok;
 io_binary_1(MV, Size) ->
     TailN = Size - 8,
     <<Byte, MV1/binary>> = MV,
-    io:format("~.2B", [Byte]),
     io_binary_1(MV1, TailN).

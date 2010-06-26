@@ -80,10 +80,9 @@ server() ->
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
 init([nil]) ->
-    io:format("chord_server: booting~n"),
     MyHash = myhash(),
-    Store = store_server:start(),
-    Manager = chord_man:start(MyHash, #succlist{bigger=[], smaller=[]}),
+    {ok, Store} = store_server:start(),
+    {ok, Manager} = chord_man:start(MyHash, #succlist{bigger=[], smaller=[]}),
     {ok, #state{myhash=MyHash, manager=Manager, store=Store}};
 init([InitNode]) ->
     case net_adm:ping(InitNode) of
@@ -98,11 +97,16 @@ init_successor_list(InitNode) ->
             MyHash = myhash(),
             Store = store_server:start(),
             {InitSuccList, DataList} = gen_server:call(InitServer, {join_op, MyHash}),
-            io:format("init succlist: ~p~n", [InitSuccList]),
             Manager = chord_man:start(MyHash, InitSuccList),
             [store_server:put(Key, Value, Hash) || {Key, Value, Hash} <- DataList],
             #state{myhash=MyHash, manager=Manager, store=Store}
     end.
+head({succlist, [], []}) ->
+    nil;
+head({succlist, [{_, Hash} | _], []}) ->
+    Hash;
+head({succlist, _, [{_, Hash} | _]}) ->
+    Hash.
 
 myhash() ->
     crypto:start(),
@@ -214,7 +218,6 @@ join_op_1(MyHash, NewHash, From, MySuccList) ->
         _ -> MySuccList
     end,
     gen_server:reply(From, {ResultSuccList, R=store_server:range(NewHash, MyHash)}),
-    io:format("split: ~p~n", [R]),
     join_op_2(MyHash, NewHash, From, MySuccList).
 
 join_op_2(MyHash, NewHash, {NewServer, _Ref}, MySuccList) when MyHash < NewHash ->
@@ -237,10 +240,9 @@ join_op_2(MyHash, NewHash, {NewServer, _Ref}, MySuccList) when MyHash > NewHash 
 %% spawned funtion
 lookup_op(Key, From) ->
     Hash = crypto:sha(term_to_binary(Key)),
-    io:format("succlist: ~p~nhash:     ~p~n", [chord_man:successor(1), Hash]),
     case chord_man:find(1, Hash) of
         self   -> lookup_op_1(Key, From);
-        {S, _} -> io:format("cast~n"), gen_server:cast(S, {lookup_op_cast, Key, From})
+        {S, _} -> gen_server:cast(S, {lookup_op_cast, Key, From})
     end.
 
 lookup_op_1(Key, From) ->

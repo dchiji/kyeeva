@@ -37,6 +37,7 @@
         join/2,
         remove/1,
         test/0,
+        peern/0,
         get/1,
         get/2,
         get/3,
@@ -63,11 +64,13 @@
 %%====================================================================
 start(nil) ->
     {ok, Server} = gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], [{debug, [trace]}]),
+    %{ok, Server} = gen_server:start_link({local, ?MODULE}, ?MODULE, [nil, util_mvector:make()], []),
     gen_server:call(Server, wait),
-    sg_server:put({node(), nil}, [{'__init__', node()}]),
+    sg_server:put(make_ref(), [{'__init__', init}]),
     {ok, Server};
 start(InitNode) ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [rpc:call(InitNode, ?MODULE, get_server, []), util_mvector:make()], [{debug, [trace, log]}]).
+    %gen_server:start_link({local, ?MODULE}, ?MODULE, [rpc:call(InitNode, ?MODULE, get_server, []), util_mvector:make()], []).
 
 
 put(ParentKey, KeyList) ->
@@ -92,6 +95,10 @@ test() ->
     io:format("~n"),
     [util_mvector:io_binary(Pstate#pstate.mvector) || {_, Pstate} <- ets:tab2list(peer_table)],
     io:format("~n").
+
+
+peern() ->
+    length(ets:tab2list(peer_table)).
 
 
 get_server() ->
@@ -160,7 +167,6 @@ join({InitServer, InitKey}, NewKey, MVector, Level, OtherPeer) ->
     IncrLevel = fun() -> util_lock:ets_lock(incomplete_table, NewKey, IncrLevelCallback) end,
     Reply = fun
         ({ok, {_, {_, {remove, -1}}}}, Pid, Ref) ->
-            io:format("pid=~p, ref=~p~n", [Pid, Ref]),
             Pid ! {ok, Ref},
             util_lock:wakeup({NewKey, Level});
         ({ok, _}, Pid, Ref) ->
@@ -186,17 +192,13 @@ join({InitServer, InitKey}, NewKey, MVector, Level, OtherPeer) ->
             [SmallerPeer, BiggerPeer]
     end,
 
-    io:format("join ~p~n", [Level]),
     case gen_server:call(InitServer, {InitKey, {'join-process-0', {whereis(?MODULE), NewKey, MVector}}, Level}, ?TIMEOUT) of
         {exist, {_Server, _Key}} ->
-            io:format("~n~nexist~n~n~n"),
             pass;
         {ok, {SmallerPeer, BiggerPeer}, {Pid, Ref}} ->
             [NextPeer, NextOtherPeer] = JoinProcess(SmallerPeer, BiggerPeer, Pid, Ref),
-            io:format("~n~nNextPeer=~p~n~n=n", [NextPeer]),
             join(NextPeer, NewKey, MVector, Level + 1, NextOtherPeer);
         {error, mismatch} ->
-            io:format("~n~nerror mismatch~n~n~n"),
             case OtherPeer of
                 {nil, nil} -> util_lock:ets_lock(incomplete_table, NewKey, DeleteIncompleteElementCallback);
                 _          -> join(OtherPeer, NewKey, MVector, Level, {nil, nil})
@@ -253,13 +255,12 @@ remove(Key, Level) ->
 %%                         {stop, Reason}
 %% Description: Initiates the server
 %%--------------------------------------------------------------------
-init(Arg) ->
-    io:format("sg_server: booting~n"),
+init([InitServer | Arg]) ->
     spawn(?MODULE, init_tables, [Ref=make_ref(), self()]),
     receive {ok, Ref} -> ok end,
     util_lock:lock_init([lockdaemon_join_table, lockdaemon_ets_table]),
     util_lock:wakeup_init(),
-    {ok, Arg}.
+    {ok, [case InitServer of nil -> {nil, nil}; _ -> gen_server:call(InitServer, {peer, random}) end | Arg]}.
 
 init_tables(Ref, Return) ->
     case catch ets:lookup(node_ets_table, ?MODULE) of
@@ -287,15 +288,20 @@ init_tables(Ref, Return) ->
 handle_call(wait, _From, State) ->
     {reply, ok, State};
 
-handle_call({peer, random}, _From, State) ->
+handle_call({peer, random}, _From, nil=State) ->
     Reply = case ets:tab2list(peer_table) of
         [] -> {nil, nil};
         [{SelfKey, _} | _] -> {self(), SelfKey}
     end,
     {reply, Reply, State};
+handle_call({peer, random}, _From, [InitPeer | _]=State) ->
+    Reply = case ets:tab2list(peer_table) of
+        [] -> InitPeer;
+        [{SelfKey, _} | _] -> {self(), SelfKey}
+    end,
+    {reply, Reply, State};
 
 handle_call({'get-ets-table'}, _From, State) ->
-    io:format("get-ets-table~n"),
     [{_, Tab}] = ets:lookup(node_ets_table, whereis(?MODULE)),
     {reply, Tab, State};
 
@@ -307,31 +313,41 @@ handle_call({_Key, {put, _ParentKey}}, _From, State) ->
     {reply, ok, State};
 
 %% lookupメッセージを受信し、適当なローカルピア(無ければグローバルピア)を選択して，lookup_process_0に繋げる．
-handle_call({lookup, Key0, Key1, AttributeList, From}, _From, [InitServer | Tail]) ->
-    spawn(sg_lookup,lookup, [InitServer, Key0, Key1, AttributeList, {Ref=make_ref(), From}]),
-    {reply, Ref, [InitServer | Tail]};
+handle_call({lookup, Key0, Key1, AttributeList, From}, _From, [InitPeer | _]=State) ->
+    spawn(sg_lookup,lookup, [InitPeer, Key0, Key1, AttributeList, {Ref=make_ref(), From}]),
+    {reply, Ref, State};
 
 %% 最適なピアを探索する．
-handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From}}}, _From, State) ->
-    spawn(sg_lookup, process_0, [SelfKey, Key0, Key1, AttributeList, From]),
+%handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From}}}, _From, State) ->
+handle_call({SelfKey, {'lookup-process-0', {Key0, Key1, AttributeList, From, HopList}}}, _From, State) ->
+    %spawn(sg_lookup, process_0, [SelfKey, Key0, Key1, AttributeList, From]),
+    spawn(sg_lookup, process_0, [SelfKey, Key0, Key1, AttributeList, From, HopList]),
     {reply, nil, State};
 
 %% 指定された範囲内を走査し，値を収集する．
-handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, AttributeList, From}}}, _From, State) ->
-    spawn(sg_lookup, process_1, [SelfKey, Key0, Key1, AttributeList, From]),
+%handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, AttributeList, From}}}, _From, State) ->
+handle_call({SelfKey, {'lookup-process-1', {Key0, Key1, AttributeList, From, HopList}}}, _From, State) ->
+    %spawn(sg_lookup, process_1, [SelfKey, Key0, Key1, AttributeList, From]),
+    spawn(sg_lookup, process_1, [SelfKey, Key0, Key1, AttributeList, From, HopList]),
     {noreply, State};
 
 %% joinメッセージを受信し、適当なローカルピア(無ければグローバルピア)を返す．
-handle_call({'select-first-peer', _NewKey}, From, [InitServer | Tail]) ->
+handle_call({'select-first-peer', _NewKey}, From, nil=State) ->
+    Reply = case ets:tab2list(peer_table) of
+        [{SelfKey, _} | _]-> {ok, {self(), SelfKey}};
+        [] -> {ok, {nil, nil}}
+    end,
+    {reply, Reply, State};
+handle_call({'select-first-peer', _NewKey}, From, [InitPeer | _]=State) ->
     Reply = case ets:tab2list(peer_table) of
         [{SelfKey, _} | _]-> {ok, {self(), SelfKey}};
         [] ->
-            case InitServer of
-                nil -> {ok, {nil, nil}};
-                _ -> {ok, gen_server:call(InitServer, {peer, random})}
+            case InitPeer of
+                {nil, nil} -> {ok, {nil, nil}};
+                _ -> {ok, InitPeer}
             end
     end,
-    {reply, Reply, [InitServer | Tail]};
+    {reply, Reply, State};
 
 %% join-process-0にFromを渡して再度呼ぶ．
 handle_call({SelfKey, {'join-process-0', {Server, NewKey, MVector}}, Level}, From, State) ->
@@ -372,15 +388,12 @@ handle_call({SelfKey, {'join-process-1-oneway', {From, Server, NewKey, MVector}}
     {reply, nil, State};
 
 %% ローカルで呼び出すことはない．Neighborをupdateする．
-handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other}, _From, State) ->
+handle_call({SelfKey, {'join-process-2', {Server, NewKey}}, Level, Other}, From, State) ->
     Self = self(),
     F = fun() ->
             Ref = make_ref(),
             util_lock:set_neighbor(SelfKey, {Server, NewKey}, Level),
-            if
-                NewKey < SelfKey -> gen_server:reply(From, {ok, {Other, {Self, SelfKey}}, {self(), Ref}});
-                SelfKey < NewKey -> gen_server:reply(From, {ok, {{Self, SelfKey}, Other}, {self(), Ref}})
-            end,
+            gen_server:reply(From, {ok, Ref, self()}),
             % reply先がNeighborの更新に成功するまで待機
             receive
                 {ok, Ref} ->
@@ -390,8 +403,9 @@ handle_call({SelfKey, {'join-process-2', {From, Server, NewKey}}, Level, Other},
                     end
             end
     end,
+    %spawn(util_lock, join_lock, [{SelfKey, Level}, F]),
     util_lock:join_lock({SelfKey, Level}, F),
-    {reply, nil, State};
+    {noreply, nil, State};
 
 %% remove-process-0にFromを渡して再度呼ぶ．
 handle_call({SelfKey, {'remove-process-0', {RemovedKey}}, Level}, From, State) ->
